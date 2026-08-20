@@ -1,0 +1,25 @@
+{% extends "neon_error.html" %}
+
+{% block title %}404 - You're Lost in Cyberspace{% endblock %}
+
+{% block content %}
+<div class="error-code">404</div>
+<h1 class="error-title">YOU'RE LOST</h1>
+<p class="error-message">
+    <span class="status-dot"></span>
+    The page you're searching for has vanished into the digital void.
+    <span class="status-dot"></span>
+</p>
+<p class="error-message" style="font-size: 14px; letter-spacing: 0.5px;">
+    Signal lost. Reality discontinued. Time to navigate back to known territory.
+</p>
+
+<div class="button-group">
+    <a href="{{ url_for('dashboard') if current_user.is_authenticated else url_for('login') }}" class="neon-button">
+        ↻ Return Home
+    </a>
+    <a href="javascript:history.back()" class="neon-button">
+        ⬅ Go Back
+    </a>
+</div>
+{% endblock %}

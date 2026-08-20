@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Register</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h2>Register</h2>
+    <form method="POST">
+        <label>Full Name:</label><br>
+        <input type="text" name="name" required><br><br>
+        <label>Birthday:</label><br>
+        <input type="date" name="birthday" required><br><br>
+        <label>Age:</label><br>
+        <input type="number" name="age" required><br><br>
+        <label>Address:</label><br>
+        <input type="text" name="address" required><br><br>
+        <label>Email:</label><br>
+        <input type="email" name="email" required><br><br>
+        <label>Password:</label><br>
+        <input type="password" name="password" required><br><br>
+        <button type="submit">Register</button>
+    </form>
+    <p><a href="{{ url_for('login') }}">Back to Login</a></p>
+</body>
+</html>

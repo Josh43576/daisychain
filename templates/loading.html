@@ -1,0 +1,28 @@
+{% extends "neon_error.html" %}
+
+{% block title %}Loading...{% endblock %}
+
+{% block content %}
+<div class="error-code" style="font-size: 80px; animation: none; background: linear-gradient(135deg, #00d4ff, #00a8cc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">
+    ⚡
+</div>
+<h1 class="error-title">INITIALIZING</h1>
+<p class="error-message">
+    <span class="status-dot"></span>
+    Synchronizing with the mainframe...
+    <span class="status-dot"></span>
+</p>
+
+<div class="loading-spinner">
+    <div class="spinner-ring"></div>
+    <div class="spinner-ring"></div>
+</div>
+
+<p class="error-message" style="font-size: 12px; letter-spacing: 2px;">
+    [ ████████░░ ] 84% ↴
+</p>
+
+<p class="error-message" style="font-size: 13px; animation: none; color: #00a8cc;">
+    Booting neural networks • Calibrating power flux • Engaging warp drive
+</p>
+{% endblock %}

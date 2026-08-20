@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="auth-shell">
+        <div class="auth-card">
+            <div class="brand-block">
+                <div class="brand-badge">⚡</div>
+                <h1>Smart Energy</h1>
+                <p>Power monitoring and control</p>
+            </div>
+
+            <h2>Login</h2>
+
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    <div class="flash-box">
+                        {% for message in messages %}
+                            <p>{{ message }}</p>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" class="auth-form">
+                <label>Email</label>
+                <input type="email" name="email" required>
+
+                <label>Password</label>
+                <input type="password" name="password" required>
+
+                <button type="submit">Login</button>
+            </form>
+
+            <div class="auth-links">
+                <a href="{{ url_for('register') }}">Create account</a>
+                <a href="{{ url_for('forgot') }}">Forgot password?</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

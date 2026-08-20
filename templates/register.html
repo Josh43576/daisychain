@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Register</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="auth-shell">
+        <div class="auth-card wider">
+            <div class="brand-block">
+                <div class="brand-badge">⚡</div>
+                <h1>Smart Energy</h1>
+                <p>Create your account</p>
+            </div>
+
+            <h2>Register</h2>
+
+            <form method="POST" class="auth-form">
+                <label>Email</label>
+                <input type="email" name="email" required>
+
+                <label>Password</label>
+                <input type="password" name="password" required>
+
+                <label>Re-enter Password</label>
+                <input type="password" name="confirm_password" required>
+
+                <label>Name</label>
+                <input type="text" name="name" required>
+
+                <label>Birthday</label>
+                <input type="date" name="birthday">
+
+                <label>Age</label>
+                <input type="number" name="age" min="1">
+
+                <label>Address</label>
+                <textarea name="address" rows="3"></textarea>
+
+                <button type="submit">Create account</button>
+            </form>
+
+            <div class="auth-links">
+                <a href="{{ url_for('login') }}">Already have an account?</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
