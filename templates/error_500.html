@@ -1,0 +1,30 @@
+{% extends "neon_error.html" %}
+
+{% block title %}500 - System Error{% endblock %}
+
+{% block content %}
+<div class="error-code">500</div>
+<h1 class="error-title">CRITICAL FAILURE</h1>
+<p class="error-message">
+    <span class="status-dot"></span>
+    Systems are overloaded. The network is experiencing a catastrophic cascade.
+    <span class="status-dot"></span>
+</p>
+<p class="error-message" style="font-size: 14px; letter-spacing: 0.5px;">
+    Our engineers are rerouting power through backup circuits. Please stand by...
+</p>
+
+<div class="loading-spinner">
+    <div class="spinner-ring"></div>
+    <div class="spinner-ring"></div>
+</div>
+
+<div class="button-group">
+    <a href="{{ url_for('dashboard') if current_user.is_authenticated else url_for('login') }}" class="neon-button">
+        ↻ Try Again
+    </a>
+    <a href="/" class="neon-button">
+        ⌂ Home Base
+    </a>
+</div>
+{% endblock %}

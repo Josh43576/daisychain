@@ -1,6 +1,14 @@
+<<<<<<< HEAD
 requests==2.31.0
 pyserial==3.5
 RPi.GPIO==0.7.1
 spidev==3.6
 mfrc522==0.0.7
 smbus2==0.4.2
+=======
+Flask==3.0.0
+Flask-Login==0.6.3
+Flask-SQLAlchemy==3.1.1
+Werkzeug==3.0.1
+requests==2.31.0
+>>>>>>> 8053b6d1117867a77becff4dfb04333b35b21189

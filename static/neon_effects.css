@@ -1,0 +1,340 @@
+/* ========================================
+   NEON EFFECTS STYLESHEET
+   Sky-Blue Lightning Theme
+   ======================================== */
+
+:root {
+    /* Neon Colors */
+    --neon-primary: #00d4ff;      /* Sky Blue Neon */
+    --neon-secondary: #00a8cc;    /* Darker Sky Blue */
+    --neon-accent: #a0d8ff;       /* Light Sky Blue */
+    --neon-glow: rgba(0, 212, 255, 0.5);
+    
+    /* Dark Background */
+    --bg-dark: #0a0e27;
+    --bg-darker: #05070f;
+    --bg-gradient: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+    
+    /* Shadows & Effects */
+    --shadow-glow: 0 0 20px rgba(0, 212, 255, 0.6);
+    --shadow-inset: inset 0 0 20px rgba(0, 212, 255, 0.1);
+    --blur-effect: blur(10px);
+}
+
+/* ========================================
+   UTILITY CLASSES
+   ======================================== */
+
+.neon-text {
+    color: var(--neon-primary);
+    text-shadow: 
+        0 0 10px var(--neon-primary),
+        0 0 20px var(--neon-secondary),
+        0 0 40px rgba(0, 212, 255, 0.5);
+    letter-spacing: 2px;
+}
+
+.neon-border {
+    border: 2px solid var(--neon-primary);
+    box-shadow: 
+        0 0 20px var(--neon-glow),
+        inset 0 0 20px rgba(0, 212, 255, 0.1);
+}
+
+.neon-glow {
+    filter: drop-shadow(0 0 10px var(--neon-primary));
+}
+
+.cyberpunk-grid {
+    background-image: 
+        linear-gradient(0deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+    background-size: 50px 50px;
+}
+
+/* ========================================
+   ANIMATION LIBRARY
+   ======================================== */
+
+@keyframes glitchEffect {
+    0% {
+        text-shadow: 
+            -2px 0 #ff00ff,
+            2px 0 #00ffff;
+    }
+    20% {
+        text-shadow: 
+            -2px 0 #ff00ff,
+            2px 0 #00ffff;
+    }
+    40% {
+        text-shadow: none;
+    }
+    60% {
+        text-shadow: 
+            -2px 0 #ff00ff,
+            2px 0 #00ffff;
+    }
+    80% {
+        text-shadow: none;
+    }
+    100% {
+        text-shadow: 
+            -2px 0 #ff00ff,
+            2px 0 #00ffff;
+    }
+}
+
+@keyframes neonBlink {
+    0%, 19%, 21%, 100% {
+        opacity: 1;
+    }
+    20% {
+        opacity: 0;
+    }
+}
+
+@keyframes scanlines {
+    0% {
+        transform: translateY(0);
+    }
+    100% {
+        transform: translateY(10px);
+    }
+}
+
+@keyframes arcFlash {
+    0% {
+        opacity: 0;
+        filter: drop-shadow(0 0 5px var(--neon-primary));
+    }
+    50% {
+        opacity: 1;
+        filter: drop-shadow(0 0 20px var(--neon-primary));
+    }
+    100% {
+        opacity: 0;
+        filter: drop-shadow(0 0 5px var(--neon-primary));
+    }
+}
+
+@keyframes electricPulse {
+    0%, 100% {
+        filter: drop-shadow(0 0 10px var(--neon-primary));
+    }
+    50% {
+        filter: drop-shadow(0 0 25px var(--neon-primary)) drop-shadow(0 0 35px rgba(0, 212, 255, 0.5));
+    }
+}
+
+@keyframes wavyMotion {
+    0%, 100% {
+        transform: translateY(0px);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+@keyframes floatIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-50px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(50px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes rotationSpin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ========================================
+   NEON BUTTON VARIATIONS
+   ======================================== */
+
+.btn-neon-primary {
+    background: transparent;
+    border: 2px solid var(--neon-primary);
+    color: var(--neon-primary);
+    padding: 12px 30px;
+    font-weight: 600;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    border-radius: 5px;
+}
+
+.btn-neon-primary:hover {
+    box-shadow: 
+        0 0 20px var(--neon-glow),
+        inset 0 0 20px rgba(0, 212, 255, 0.1);
+    text-shadow: 0 0 10px var(--neon-primary);
+}
+
+.btn-neon-primary:active {
+    transform: scale(0.98);
+}
+
+/* ========================================
+   LOADING VARIANTS
+   ======================================== */
+
+.orbit-spinner {
+    width: 60px;
+    height: 60px;
+    position: relative;
+    margin: 20px auto;
+}
+
+.orbit-spinner div {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    margin-left: -50%;
+    margin-top: -50%;
+    animation: orbitSpin 2s linear infinite;
+}
+
+.orbit-spinner div:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.orbit-spinner div:nth-child(2) {
+    animation-delay: 0.5s;
+}
+
+.orbit-spinner div:nth-child(3) {
+    animation-delay: 1s;
+}
+
+.orbit-spinner div::after {
+    content: '';
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: var(--neon-primary);
+    border-radius: 50%;
+    top: 0;
+    left: 0;
+    box-shadow: 0 0 15px var(--neon-primary);
+}
+
+@keyframes orbitSpin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* ========================================
+   RESPONSIVE DESIGN
+   ======================================== */
+
+@media (max-width: 768px) {
+    .error-code {
+        font-size: 60px !important;
+        letter-spacing: 10px;
+    }
+    
+    .error-title {
+        font-size: 24px;
+        letter-spacing: 2px;
+    }
+    
+    .error-message {
+        font-size: 14px;
+    }
+    
+    .neon-button {
+        padding: 10px 20px;
+        font-size: 12px;
+    }
+    
+    .button-group {
+        gap: 10px;
+    }
+}
+
+@media (max-width: 480px) {
+    .error-code {
+        font-size: 48px !important;
+        letter-spacing: 5px;
+    }
+    
+    .neon-frame {
+        padding: 30px 20px;
+        border-radius: 8px;
+    }
+    
+    .error-title {
+        font-size: 20px;
+    }
+    
+    .button-group {
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .neon-button {
+        width: 100%;
+    }
+}
+
+/* ========================================
+   DARK MODE OPTIMIZATION
+   ======================================== */
+
+@media (prefers-color-scheme: dark) {
+    body {
+        background: var(--bg-gradient);
+    }
+}
+
+/* ========================================
+   REDUCED MOTION SUPPORT
+   ======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

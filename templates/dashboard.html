@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="dashboard-shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">Smart Energy</p>
+                <h1>Power Monitoring Dashboard</h1>
+            </div>
+            <a href="{{ url_for('logout') }}" class="logout-btn">Logout</a>
+        </header>
+
+        <div class="welcome-row">
+            <div class="welcome-card">
+                <span>Welcome back</span>
+                <strong>{{ current_user.name }}</strong>
+            </div>
+        </div>
+
+        <section class="stats-grid">
+            <div class="stat-card accent-purple">
+                <span>Total readings</span>
+                <strong>{{ logs|length }}</strong>
+            </div>
+            <div class="stat-card accent-blue">
+                <span>Latest voltage</span>
+                <strong>{{ (logs[-1].voltage if logs else 0) | round(2) }} V</strong>
+            </div>
+            <div class="stat-card accent-green">
+                <span>Latest current</span>
+                <strong>{{ (logs[-1].current if logs else 0) | round(2) }} A</strong>
+            </div>
+            <div class="stat-card accent-gold">
+                <span>Latest power</span>
+                <strong>{{ (logs[-1].power if logs else 0) | round(2) }} W</strong>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h3>Recent logs</h3>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Voltage (V)</th>
+                            <th>Current (A)</th>
+                            <th>Power (W)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr>
+                            <td>{{ log.date_recorded }}</td>
+                            <td>{{ log.voltage }}</td>
+                            <td>{{ log.current }}</td>
+                            <td>{{ log.power }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel chart-panel">
+            <div class="panel-header">
+                <h3>Consumption chart</h3>
+            </div>
+            <canvas id="powerChart"></canvas>
+        </section>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('powerChart').getContext('2d');
+        const powerChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [{% for log in logs %}"{{ log.date_recorded }}",{% endfor %}],
+                datasets: [{
+                    label: 'Power (W)',
+                    data: [{% for log in logs %}{{ log.power }},{% endfor %}],
+                    borderColor: '#5b7cff',
+                    backgroundColor: 'rgba(91, 124, 255, 0.15)',
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.3
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
