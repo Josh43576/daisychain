@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -6,6 +6,8 @@ from sqlalchemy import inspect, text
 import os, random, smtplib, datetime
 
 app = Flask(__name__)
+DEFAULT_PRESET_LIMIT = 500.0
+PRESET_LIMIT_WATTS = DEFAULT_PRESET_LIMIT
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SECRET_KEY'] = 'secret_key_here'
 db = SQLAlchemy(app)
@@ -42,6 +44,17 @@ class Log(db.Model):
     date_recorded = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     user = db.relationship("User", backref=db.backref("logs", lazy=True))
+
+
+class PowerEvent(db.Model):
+    __tablename__ = "power_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    event_type = db.Column(db.String(50), nullable=False)
+    value_watts = db.Column(db.Float, default=0.0)
+    preset_limit = db.Column(db.Float, default=0.0)
+    message = db.Column(db.String(255), default="")
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -205,6 +218,53 @@ def reset():
 def dashboard():
     logs = Log.query.filter_by(user_id=current_user.id).all()
     return render_template("dashboard.html", logs=logs)
+
+@app.route("/set-preset", methods=["POST"])
+@login_required
+def set_preset():
+    global PRESET_LIMIT_WATTS
+    try:
+        PRESET_LIMIT_WATTS = float(request.form.get("preset_limit", PRESET_LIMIT_WATTS))
+    except ValueError:
+        flash("Invalid power preset. Please enter a number.")
+        return redirect(url_for("dashboard"))
+
+    flash(f"Power limit set to {PRESET_LIMIT_WATTS} W.")
+    return redirect(url_for("dashboard"))
+
+@app.route("/api/control", methods=["GET"])
+def api_control():
+    return jsonify({
+        "appliances": ["OFF", "OFF", "OFF"],
+        "preset_limit": PRESET_LIMIT_WATTS
+    })
+
+@app.route("/api/preset", methods=["GET", "POST"])
+def api_preset():
+    global PRESET_LIMIT_WATTS
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        try:
+            PRESET_LIMIT_WATTS = float(payload.get("preset_limit", PRESET_LIMIT_WATTS))
+        except (TypeError, ValueError):
+            return jsonify({"error": "preset_limit must be a number"}), 400
+        return jsonify({"preset_limit": PRESET_LIMIT_WATTS, "status": "updated"})
+
+    return jsonify({"preset_limit": PRESET_LIMIT_WATTS})
+
+@app.route("/api/power-events", methods=["GET"])
+def api_power_events():
+    events = PowerEvent.query.order_by(PowerEvent.created_at.desc()).limit(20).all()
+    payload = [{
+        "id": event.id,
+        "event_type": event.event_type,
+        "value_watts": event.value_watts,
+        "preset_limit": event.preset_limit,
+        "message": event.message,
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    } for event in events]
+    return jsonify(payload)
 
 @app.route("/logout")
 def logout():
