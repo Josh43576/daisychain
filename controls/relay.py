@@ -2,7 +2,7 @@ try:
     import RPi.GPIO as GPIO
 except ModuleNotFoundError:
     class _GPIO:
-        BCM = "BCM"
+        BOARD = "BOARD"
         OUT = "OUT"
         HIGH = 1
         LOW = 0
@@ -25,11 +25,12 @@ except ModuleNotFoundError:
 
     GPIO = _GPIO()
 
-# Define GPIO pins for 3 SSR relays
-relay_pins = [17, 27, 22]  # Adjust if you wire differently
+# MPI3508 / Raspberry Pi physical pin numbering
+# These are the relay control pins used for the appliance outputs.
+relay_pins = [11, 13, 15]  # physical pins 11, 13, 15
 
-# Setup GPIO mode
-GPIO.setmode(GPIO.BCM)
+# Use BOARD numbering to match your MPI3508 header wiring.
+GPIO.setmode(GPIO.BOARD)
 for pin in relay_pins:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)  # Default OFF
