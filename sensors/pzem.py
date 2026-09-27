@@ -1,10 +1,38 @@
+import os
 import serial
 import struct
 
 __all__ = ["read_pzem", "read_all_pzem"]
 
-# Define ports for 3 sensors (adjust based on your USB adapters)
-ports = ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2']
+# Three appliance channels. Configure one port per PZEM sensor.
+# Prefer USB serial adapters for each sensor, and fall back to Pi UART devices.
+PZEM_PORTS = [
+    '/dev/ttyUSB0',
+    '/dev/ttyUSB1',
+    '/dev/ttyUSB2',
+]
+UART_PORTS = ['/dev/serial0', '/dev/ttyAMA0', '/dev/ttyS0']
+
+
+def get_available_ports():
+    """Return the serial ports available for the 3 PZEM sensors."""
+    available = []
+    for port in PZEM_PORTS + UART_PORTS:
+        if os.path.exists(port):
+            available.append(port)
+
+    # If only UART devices are available, use them in order for the three channels.
+    if not available:
+        return list(PZEM_PORTS)
+
+    # Keep exactly 3 appliance slots if possible.
+    ports = []
+    for port in available:
+        if port not in ports:
+            ports.append(port)
+        if len(ports) >= 3:
+            break
+    return ports
 
 # PZEM-004T Modbus RTU protocol commands
 PZEM_DEFAULT_ADDR = 0xF8
@@ -76,9 +104,14 @@ def read_pzem(port):
 def read_all_pzem():
     """
     Reads all connected PZEM sensors and returns a list of readings.
+    Three appliance channels are supported: one sensor per appliance channel.
     """
     readings = []
-    for port in ports:
+    for port in get_available_ports():
         readings.append(read_pzem(port))
-    return readings
- 
+
+    # Keep the structure stable for 3 channels even if one sensor is missing.
+    while len(readings) < 3:
+        readings.append({"error": "No PZEM sensor detected on this channel"})
+
+    return readings[:3]

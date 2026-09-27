@@ -2,7 +2,7 @@ from sensors import read_all_pzem
 from controls.relay import control_appliance, cleanup as cleanup_relay
 from auth.rfid import check_user, read_rfid_id, is_authorized
 from display.lcd import show_readings, initialize_lcd
-from utils.server import send_to_server, get_control_commands
+from utils.server import send_to_server, get_control_commands, set_appliance_names
 import time
 import signal
 import sys
@@ -18,6 +18,52 @@ admin_override_active = False
 daily_energy_kwh = 0.0
 state_file = os.path.join(os.path.dirname(__file__), "daily_usage_state.json")
 history_file = os.path.join(os.path.dirname(__file__), "daily_usage_history.json")
+config_file = os.path.join(os.path.dirname(__file__), "appliance_config.json")
+DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
+appliance_names = DEFAULT_APPLIANCE_NAMES.copy()
+
+
+def load_appliance_names():
+    """Load saved appliance names; if missing, ask admin to configure them before startup."""
+    global appliance_names
+    try:
+        if not os.path.exists(config_file):
+            return appliance_names
+        with open(config_file, "r") as file:
+            data = json.load(file)
+            names = data.get("appliance_names")
+            if isinstance(names, list) and len(names) == 3:
+                appliance_names = [str(name).strip() or f"Appliance {i + 1}" for i, name in enumerate(names)]
+                return appliance_names
+    except Exception:
+        pass
+    return appliance_names
+
+
+def save_appliance_names(names):
+    payload = {"appliance_names": names}
+    with open(config_file, "w") as file:
+        json.dump(payload, file)
+
+
+def configure_appliance_names():
+    """Prompt admin to assign names to each appliance before monitoring starts."""
+    global appliance_names
+    names = load_appliance_names()
+
+    if names and all(str(name).strip() for name in names):
+        appliance_names = names
+        return appliance_names
+
+    print("Configure appliance types before starting the system.")
+    for i in range(3):
+        user_input = input(f"Enter appliance {i + 1} type (example: Refrigerator, AC, Lights): ").strip()
+        names[i] = user_input if user_input else f"Appliance {i + 1}"
+
+    appliance_names = names
+    save_appliance_names(appliance_names)
+    set_appliance_names(appliance_names)
+    return appliance_names
 
 
 def signal_handler(sig, frame):
@@ -144,6 +190,7 @@ def main():
     print("Starting Advanced IoT Power Management System...")
     print("Press Ctrl+C to stop.")
     load_daily_state()
+    configure_appliance_names()
 
     # Setup signal handler for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
@@ -169,7 +216,7 @@ def main():
                 continue
 
             # 4. Display locally
-            show_readings(readings)
+            show_readings(readings, appliance_names)
 
             # 5. Send to Flask web app
             send_to_server(readings)
@@ -177,6 +224,7 @@ def main():
             # 6. Get control commands from Flask
             commands = get_control_commands()
             appliances = commands.get("appliances", [])
+            appliance_names = commands.get("appliance_names", DEFAULT_APPLIANCE_NAMES)
             preset_limit = float(commands.get("preset_limit", 500.0))
             active_limit = admin_override_limit if admin_override_active else preset_limit
 

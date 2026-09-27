@@ -8,6 +8,8 @@ import os, random, smtplib, datetime
 app = Flask(__name__)
 DEFAULT_PRESET_LIMIT = 500.0
 PRESET_LIMIT_WATTS = DEFAULT_PRESET_LIMIT
+DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
+APPLIANCE_NAMES = DEFAULT_APPLIANCE_NAMES.copy()
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SECRET_KEY'] = 'secret_key_here'
 db = SQLAlchemy(app)
@@ -236,8 +238,31 @@ def set_preset():
 def api_control():
     return jsonify({
         "appliances": ["OFF", "OFF", "OFF"],
-        "preset_limit": PRESET_LIMIT_WATTS
+        "preset_limit": PRESET_LIMIT_WATTS,
+        "appliance_names": APPLIANCE_NAMES
     })
+
+@app.route("/api/config", methods=["GET", "POST"])
+def api_config():
+    global APPLIANCE_NAMES
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        names = payload.get("appliance_names")
+        if not isinstance(names, list) or len(names) != 3:
+            return jsonify({"error": "appliance_names must be a list of exactly 3 names"}), 400
+
+        cleaned = []
+        for item in names:
+            label = str(item).strip()
+            if not label:
+                label = f"Appliance {len(cleaned) + 1}"
+            cleaned.append(label)
+
+        APPLIANCE_NAMES = cleaned
+        return jsonify({"appliance_names": APPLIANCE_NAMES, "status": "updated"})
+
+    return jsonify({"appliance_names": APPLIANCE_NAMES})
 
 @app.route("/api/preset", methods=["GET", "POST"])
 def api_preset():

@@ -36,7 +36,7 @@ LCD_RS = 18
 LCD_E = 23
 LCD_D4 = 24
 LCD_D5 = 25
-LCD_D6 = 8
+LCD_D6 = 26
 LCD_D7 = 7
 
 LCD_WIDTH = 16
@@ -115,15 +115,19 @@ def initialize_lcd():
             print(f"Error initializing LCD: {e}")
 
 
-def show_readings(readings):
-    """Display readings on the LCD"""
+def show_readings(readings, appliance_names=None):
+    """Display readings on the LCD using friendly appliance names."""
+    names = appliance_names or ["A1", "A2", "A3"]
     try:
         if len(readings) >= 1:
-            lcd_string(f"A1 P:{readings[0].get('power','-')}W", 1)
+            label = names[0][:5]
+            lcd_string(f"{label} P:{readings[0].get('power','-')}W", 1)
         if len(readings) >= 2:
-            lcd_string(f"A2 P:{readings[1].get('power','-')}W", 2)
+            label = names[1][:5]
+            lcd_string(f"{label} P:{readings[1].get('power','-')}W", 2)
     except Exception as e:
         print(f"Error updating LCD: {e}")
 
     for i, r in enumerate(readings):
-        print(f"Appliance {i + 1}: {r}")
+        name = names[i] if i < len(names) else f"Appliance {i + 1}"
+        print(f"{name}: {r}")
