@@ -14,7 +14,8 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SECRET_KEY'] = 'secret_key_here'
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
-login_manager.login_view = "login"
+# Pylance may complain about assignment types here; ignore the checker for this runtime assignment
+login_manager.login_view = "login"  # type: ignore[assignment]
 
 # ------------------ MODELS ------------------
 class User(UserMixin, db.Model):
@@ -28,6 +29,21 @@ class User(UserMixin, db.Model):
     age = db.Column(db.Integer)
     address = db.Column(db.String(200))
     verified = db.Column(db.Boolean, default=False)
+    def __init__(self, email: str, name: str | None = None, birthday: str | None = None, age: int | str | None = None, address: str | None = None, **kwargs):
+        # Provide an explicit constructor so static checkers (Pylance) recognize these parameters
+        super().__init__(**kwargs)
+        self.email = email
+        self.name = name
+        self.birthday = birthday
+        # allow None for age; accept string or int and coerce to int when possible
+        coerced_age = None
+        if age is not None and age != "":
+            try:
+                coerced_age = int(age)
+            except Exception:
+                coerced_age = None
+        self.age = coerced_age
+        self.address = address
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -157,10 +173,13 @@ def verify():
     if request.method == "POST":
         code = request.form["code"]
         email = session.get("pending_email")
-        user = User.query.filter_by(email=email).first()
+        user = User.query.filter_by(email=email).first() if email else None
         if code == session.get("verification_code"):
-            user.verified = True
-            db.session.commit()
+            if user:
+                user.verified = True
+                db.session.commit()
+            else:
+                flash("No pending user found for verification.")
             flash("Account verified! You can now login.")
             return redirect(url_for("login"))
         else:
@@ -173,7 +192,7 @@ def login():
         email = normalize_email(request.form["email"])
         password = request.form["password"]
         user = User.query.filter_by(email=email).first()
-        if user and user.check_password(password) and user.verified:
+        if user and hasattr(user, "check_password") and user.check_password(password) and getattr(user, "verified", False):
             login_user(user)
             return redirect(url_for("dashboard"))
         elif user and not user.verified:
@@ -206,9 +225,12 @@ def reset():
         new_password = request.form["password"]
         if code == session.get("reset_code"):
             email = session.get("reset_email")
-            user = User.query.filter_by(email=email).first()
-            user.set_password(new_password)
-            db.session.commit()
+            user = User.query.filter_by(email=email).first() if email else None
+            if user:
+                user.set_password(new_password)
+                db.session.commit()
+            else:
+                flash("No user found for password reset.")
             flash("Password reset successful.")
             return redirect(url_for("login"))
         else:

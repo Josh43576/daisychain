@@ -5,6 +5,7 @@ try:
 except ModuleNotFoundError:
     class _GPIO:
         BOARD = "BOARD"
+        BCM = "BCM"
         OUT = "OUT"
         HIGH = 1
         LOW = 0
@@ -74,7 +75,8 @@ def lcd_write_byte(bits, mode):
 
 
 def lcd_init():
-    GPIO.setmode(GPIO.BOARD)
+    # Use BCM numbering to match the GPIO constants (BCM numbers)
+    GPIO.setmode(GPIO.BCM)
     GPIO.setup(LCD_RS, GPIO.OUT)
     GPIO.setup(LCD_E, GPIO.OUT)
     GPIO.setup(LCD_D4, GPIO.OUT)
