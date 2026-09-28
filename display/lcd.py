@@ -30,6 +30,11 @@ except ModuleNotFoundError:
 
 __all__ = ["initialize_lcd", "show_readings"]
 
+# Set to False if you do not have a GPIO-connected HD44780-style 16x2 LCD.
+# The MPI3508 device (I2C/SPI variant) may be separate; disable GPIO LCD
+# to avoid attempting to access Raspberry Pi GPIO when not wired.
+USE_GPIO_LCD = False
+
 # MPI3508 / Raspberry Pi direct GPIO LCD wiring
 # Power lines are connected to physical pin 2 (5V) and pin 6 (GND).
 # Update the signal pins below to match your actual MPI3508 wiring.
@@ -109,6 +114,9 @@ def lcd_string(message, line):
 def initialize_lcd():
     """Initialize the LCD once at startup."""
     global lcd_initialized
+    if not USE_GPIO_LCD:
+        return
+
     if not lcd_initialized:
         try:
             lcd_init()
@@ -121,12 +129,13 @@ def show_readings(readings, appliance_names=None):
     """Display readings on the LCD using friendly appliance names."""
     names = appliance_names or ["A1", "A2", "A3"]
     try:
-        if len(readings) >= 1:
-            label = names[0][:5]
-            lcd_string(f"{label} P:{readings[0].get('power','-')}W", 1)
-        if len(readings) >= 2:
-            label = names[1][:5]
-            lcd_string(f"{label} P:{readings[1].get('power','-')}W", 2)
+        if USE_GPIO_LCD:
+            if len(readings) >= 1:
+                label = names[0][:5]
+                lcd_string(f"{label} P:{readings[0].get('power','-')}W", 1)
+            if len(readings) >= 2:
+                label = names[1][:5]
+                lcd_string(f"{label} P:{readings[1].get('power','-')}W", 2)
     except Exception as e:
         print(f"Error updating LCD: {e}")
 
