@@ -28,8 +28,8 @@ def init_reader():
         reader = None
         return False
 
-# Example list of authorized IDs (replace with your actual card IDs)
-AUTHORIZED_IDS = [1234567890, 9876543210]
+# Authorized RFID card IDs
+AUTHORIZED_IDS = [1234567890, 9876543210, 350602620437]
 
 __all__ = ["check_user", "AUTHORIZED_IDS", "read_rfid_id", "is_authorized"]
 
