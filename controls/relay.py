@@ -27,9 +27,8 @@ except ModuleNotFoundError:
     GPIO = _GPIO()
 
 # MPI3508 / Raspberry Pi relay wiring (BCM numbering)
-# Use GPIO 22 only for MFRC522 RST; avoid pin conflicts.
-# Relay GPIOs: 17, 27, 18  — keep them free of SPI/RFID/RST usage.
-relay_pins = [17, 27, 18]
+# Physical pins: 11, 13, 15 = BCM 17, 27, 22
+relay_pins = [17, 27, 22]
 
 # Runtime initialization flag
 _relays_initialized = False
