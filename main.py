@@ -1,6 +1,6 @@
 from sensors import read_all_pzem
-from controls.relay import control_appliance, cleanup as cleanup_relay
-from auth.rfid import check_user, read_rfid_id, is_authorized
+from controls.relay import control_appliance, cleanup as cleanup_relay, init as init_relays
+from auth.rfid import check_user, read_rfid_id, is_authorized, init_reader
 from display.lcd import show_readings, initialize_lcd
 from utils.server import send_to_server, get_control_commands, set_appliance_names
 import time
@@ -189,6 +189,7 @@ def update_daily_energy(readings):
 def main():
     print("Starting Advanced IoT Power Management System...")
     print("Press Ctrl+C to stop.")
+    global admin_override_limit, admin_override_active
     load_daily_state()
     configure_appliance_names()
 
@@ -197,6 +198,9 @@ def main():
 
     # Initialize LCD once
     initialize_lcd()
+    # Initialize GPIO-controlled relays and RFID reader (deferred init)
+    init_relays()
+    init_reader()
 
     try:
         while not shutdown_requested:
@@ -226,7 +230,8 @@ def main():
             appliances = commands.get("appliances", [])
             appliance_names = commands.get("appliance_names", DEFAULT_APPLIANCE_NAMES)
             preset_limit = float(commands.get("preset_limit", 500.0))
-            active_limit = admin_override_limit if admin_override_active else preset_limit
+            # Ensure active_limit is a float and fallback to preset_limit if override is None
+            active_limit = float(admin_override_limit) if (admin_override_active and admin_override_limit is not None) else preset_limit
 
             # 7. Check each sensor against the effective power limit
             for i, reading in enumerate(readings):
@@ -259,7 +264,7 @@ def main():
                         print(f"Appliance {i+1} turned OFF")
 
             # 9. Auto-clear admin override when the load falls back under the allowed limit
-            if admin_override_active:
+            if admin_override_active and admin_override_limit is not None:
                 total_power = 0.0
                 for reading in readings:
                     try:

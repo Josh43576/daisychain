@@ -27,20 +27,42 @@ except ModuleNotFoundError:
     GPIO = _GPIO()
 
 # MPI3508 / Raspberry Pi relay wiring (BCM numbering)
-# Relay GPIOs (BCM): 17, 27, 22  — previously physical BOARD pins [11,13,15]
-relay_pins = [17, 27, 22]
+# Use GPIO 22 only for MFRC522 RST; avoid pin conflicts.
+# Relay GPIOs: 17, 27, 18  — keep them free of SPI/RFID/RST usage.
+relay_pins = [17, 27, 18]
 
-# Use BCM numbering consistently
-GPIO.setmode(GPIO.BCM)
-for pin in relay_pins:
-    GPIO.setup(pin, GPIO.OUT)
-    GPIO.output(pin, GPIO.LOW)  # Default OFF
+# Runtime initialization flag
+_relays_initialized = False
 
-__all__ = ["relay_pins", "control_appliance", "cleanup"]
+
+def init(pins=None):
+    """Initialize relay GPIOs at runtime. Call once on startup."""
+    global _relays_initialized, relay_pins
+    if pins is not None:
+        relay_pins = pins
+
+    try:
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        for pin in relay_pins:
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, GPIO.LOW)
+        _relays_initialized = True
+        return True
+    except Exception as e:
+        print(f"Relay init failed: {e}")
+        _relays_initialized = False
+        return False
+
+
+__all__ = ["relay_pins", "control_appliance", "cleanup", "init"]
 
 
 def control_appliance(index, state: bool):
     try:
+        if not _relays_initialized:
+            init()
+
         if index < 0 or index >= len(relay_pins):
             print(f"Invalid appliance index: {index}")
             return False
@@ -52,4 +74,8 @@ def control_appliance(index, state: bool):
 
 
 def cleanup():
-    GPIO.cleanup()
+    try:
+        GPIO.cleanup()
+    finally:
+        global _relays_initialized
+        _relays_initialized = False
