@@ -189,7 +189,7 @@ def update_daily_energy(readings):
 def main():
     print("Starting Advanced IoT Power Management System...")
     print("Press Ctrl+C to stop.")
-    global admin_override_limit, admin_override_active
+    global admin_override_limit, admin_override_active, appliance_names
     load_daily_state()
     configure_appliance_names()
 
@@ -228,7 +228,10 @@ def main():
             # 6. Get control commands from Flask
             commands = get_control_commands()
             appliances = commands.get("appliances", [])
-            appliance_names = commands.get("appliance_names", DEFAULT_APPLIANCE_NAMES)
+            # Use locally configured appliance_names; only sync with Flask if explicitly set
+            flask_names = commands.get("appliance_names", appliance_names)
+            if flask_names != appliance_names and flask_names != DEFAULT_APPLIANCE_NAMES:
+                appliance_names = flask_names  # Update if Flask has new names
             preset_limit = float(commands.get("preset_limit", 500.0))
             # Ensure active_limit is a float and fallback to preset_limit if override is None
             active_limit = float(admin_override_limit) if (admin_override_active and admin_override_limit is not None) else preset_limit
