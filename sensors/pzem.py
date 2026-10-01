@@ -173,18 +173,19 @@ def read_pzem_register(ser, slave_id: int, register_address: int, quantity: int 
     if not 1 <= slave_id <= 247:
         raise ValueError(f"Slave ID must be between 1 and 247, got {slave_id}")
 
+    function_code = 0x04
     for attempt in range(1, retries + 1):
         try:
             ser.flushInput()
             ser.flushOutput()
-            request = build_modbus_request(slave_id, 0x03, register_address, quantity)
+            request = build_modbus_request(slave_id, function_code, register_address, quantity)
             set_rs485_direction(True)
             ser.write(request)
             ser.flush()
             set_rs485_direction(False)
 
-            response = _read_modbus_frame(ser, 0x03, timeout=float(ser.timeout) if ser.timeout else SERIAL_TIMEOUT)
-            return validate_modbus_response(response, 0x03)
+            response = _read_modbus_frame(ser, function_code, timeout=float(ser.timeout) if ser.timeout else SERIAL_TIMEOUT)
+            return validate_modbus_response(response, function_code)
         except (TimeoutError, OSError, ValueError, serial.SerialException) as exc:
             if attempt >= retries:
                 raise RuntimeError(f"Modbus read failed for slave {slave_id} after {retries} attempts: {exc}") from exc

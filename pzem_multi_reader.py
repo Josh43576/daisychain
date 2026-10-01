@@ -59,44 +59,35 @@ PZEM_IDS = [1, 2, 3]
 
 def create_instrument(slave_id: int, port: str = SERIAL_PORT):
     """Create a minimalmodbus instrument for one PZEM module."""
-    instrument = minimalmodbus.Instrument(port, slave_id)
+    instrument = minimalmodbus.Instrument(port, slave_id, mode=minimalmodbus.MODE_RTU)
     instrument.serial.baudrate = BAUDRATE
     instrument.serial.bytesize = BYTESIZE
     instrument.serial.parity = PARITY
     instrument.serial.stopbits = STOPBITS
     instrument.serial.timeout = TIMEOUT
+    instrument.close_port_after_each_call = True
     return instrument
 
 
 def read_voltage(instrument) -> float:
     """Read voltage in volts (1 decimal place)."""
-    return instrument.read_register(0x0000, 1, 4) / 10.0
+    return instrument.read_input_register(0x0000, 1) / 10.0
 
 
 def read_current(instrument) -> float:
     """Read current in amps (3 decimal places)."""
-    # PZEM uses two registers to store a 32-bit value.
-    # Combined register values are read as a 32-bit integer, then scaled.
-    low = instrument.read_register(0x0001, 0, 4)
-    high = instrument.read_register(0x0002, 0, 4)
-    raw = (high << 16) | low
-    return raw / 1000.0
+    return instrument.read_input_registers(0x0001, 2)[0] / 1000.0
 
 
 def read_power(instrument) -> float:
     """Read power in watts (1 decimal place)."""
-    low = instrument.read_register(0x0003, 0, 4)
-    high = instrument.read_register(0x0004, 0, 4)
-    raw = (high << 16) | low
+    raw = instrument.read_long(0x0003, functioncode=4, signed=False)
     return raw / 10.0
 
 
 def read_energy(instrument) -> float:
     """Read energy in Wh (0 decimal places)."""
-    low = instrument.read_register(0x0005, 0, 4)
-    high = instrument.read_register(0x0006, 0, 4)
-    raw = (high << 16) | low
-    return float(raw)
+    return float(instrument.read_long(0x0005, functioncode=4, signed=False))
 
 
 def read_pzem_module(slave_id: int):
