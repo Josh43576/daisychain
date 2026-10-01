@@ -74,7 +74,14 @@ def control_appliance(index, state: bool):
         if index < 0 or index >= len(relay_pins):
             print(f"Invalid appliance index: {index}")
             return False
-        GPIO.output(relay_pins[index], GPIO.HIGH if state else GPIO.LOW)
+
+        if state:
+            # Enable the SSR first, then power the appliance.
+            GPIO.output(relay_pins[index], GPIO.HIGH)
+            return True
+
+        # When turning off, shut down the appliance output first and then release the SSR.
+        GPIO.output(relay_pins[index], GPIO.LOW)
         return True
     except Exception as e:
         print(f"Error controlling appliance {index}: {e}")
