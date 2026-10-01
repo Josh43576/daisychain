@@ -185,6 +185,8 @@ def read_pzem_register(ser, slave_id: int, register_address: int, quantity: int 
             set_rs485_direction(False)
 
             response = _read_modbus_frame(ser, function_code, timeout=float(ser.timeout) if ser.timeout else SERIAL_TIMEOUT)
+            if len(response) < 5:
+                raise ValueError("Too short Modbus RTU response")
             return validate_modbus_response(response, function_code)
         except (TimeoutError, OSError, ValueError, serial.SerialException) as exc:
             if attempt >= retries:

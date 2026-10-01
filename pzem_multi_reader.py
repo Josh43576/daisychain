@@ -71,12 +71,12 @@ def create_instrument(slave_id: int, port: str = SERIAL_PORT):
 
 def read_voltage(instrument) -> float:
     """Read voltage in volts (1 decimal place)."""
-    return instrument.read_input_register(0x0000, 1) / 10.0
+    return instrument.read_register(0x0000, 1, 4) / 10.0
 
 
 def read_current(instrument) -> float:
     """Read current in amps (3 decimal places)."""
-    return instrument.read_input_registers(0x0001, 2)[0] / 1000.0
+    return instrument.read_long(0x0001, functioncode=4, signed=False) / 1000.0
 
 
 def read_power(instrument) -> float:
