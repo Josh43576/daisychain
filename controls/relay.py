@@ -9,6 +9,10 @@ except ModuleNotFoundError:
         LOW = 0
 
         @staticmethod
+        def setwarnings(value):
+            pass
+
+        @staticmethod
         def setmode(mode):
             pass
 
@@ -26,9 +30,12 @@ except ModuleNotFoundError:
 
     GPIO = _GPIO()
 
-# MPI3508 / Raspberry Pi relay wiring (BCM numbering)
-# Physical pins: 11, 13, 15 = BCM 17, 27, 22
-relay_pins = [17, 27, 22]
+# Raspberry Pi GPIO mapping for the SSR outputs.
+# Physical header pins: 11 = GPIO17, 13 = GPIO27, 15 = GPIO22
+# The code uses BCM numbering internally, but the physical wiring matches these pins.
+GPIO_RELAY_PINS = [17, 27, 22]
+PHYSICAL_RELAY_PINS = [11, 13, 15]
+relay_pins = GPIO_RELAY_PINS.copy()
 
 # Runtime initialization flag
 _relays_initialized = False
@@ -41,7 +48,9 @@ def init(pins=None):
         relay_pins = pins
 
     try:
-        GPIO.setwarnings(False)
+        setwarnings = getattr(GPIO, "setwarnings", None)
+        if callable(setwarnings):
+            setwarnings(False)
         GPIO.setmode(GPIO.BCM)
         for pin in relay_pins:
             GPIO.setup(pin, GPIO.OUT)
@@ -54,7 +63,7 @@ def init(pins=None):
         return False
 
 
-__all__ = ["relay_pins", "control_appliance", "cleanup", "init"]
+__all__ = ["GPIO_RELAY_PINS", "PHYSICAL_RELAY_PINS", "relay_pins", "control_appliance", "cleanup", "init"]
 
 
 def control_appliance(index, state: bool):

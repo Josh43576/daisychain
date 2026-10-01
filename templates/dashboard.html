@@ -22,6 +22,25 @@
             </div>
         </div>
 
+        <section class="panel control-panel">
+            <div class="panel-header">
+                <h3>Appliance Control</h3>
+            </div>
+            <div class="appliance-grid">
+                {% for index in range(appliance_names|length) %}
+                <div class="appliance-card">
+                    <div class="appliance-name">{{ appliance_names[index] }}</div>
+                    <button
+                        class="power-btn {% if appliance_states[index] == 'ON' %}btn-on{% else %}btn-off{% endif %}"
+                        data-index="{{ index }}"
+                        data-state="{{ appliance_states[index] }}">
+                        {{ appliance_states[index] }}
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
         <section class="stats-grid">
             <div class="stat-card accent-purple">
                 <span>Total readings</span>
@@ -77,6 +96,59 @@
         </section>
     </div>
 
+    <style>
+        .control-panel {
+            margin-bottom: 28px;
+        }
+
+        .appliance-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 18px;
+            margin-top: 20px;
+        }
+
+        .appliance-card {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .appliance-name {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #dfe9ff;
+        }
+
+        .power-btn {
+            width: 100%;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 18px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+        }
+
+        .power-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn-on {
+            background: linear-gradient(135deg, #1de9b6, #00b894);
+            color: #042f2e;
+        }
+
+        .btn-off {
+            background: linear-gradient(135deg, #ff6b6b, #eb3b5a);
+            color: white;
+        }
+    </style>
+
     <script>
         const ctx = document.getElementById('powerChart').getContext('2d');
         const powerChart = new Chart(ctx, {
@@ -106,6 +178,41 @@
                     }
                 }
             }
+        });
+
+        const buttons = document.querySelectorAll('.power-btn');
+
+        buttons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                const index = Number(button.dataset.index);
+                const states = Array.from(buttons).map((btn) => btn.dataset.state || 'OFF');
+                const nextState = button.dataset.state === 'ON' ? 'OFF' : 'ON';
+                states[index] = nextState;
+
+                try {
+                    const response = await fetch('/api/control', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ appliances: states })
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Failed to update appliance state');
+                    }
+
+                    data.appliances.forEach((state, i) => {
+                        const btn = document.querySelector(`.power-btn[data-index="${i}"]`);
+                        if (!btn) return;
+                        btn.dataset.state = state;
+                        btn.textContent = state;
+                        btn.classList.toggle('btn-on', state === 'ON');
+                        btn.classList.toggle('btn-off', state === 'OFF');
+                    });
+                } catch (error) {
+                    alert(error.message || 'Unable to update appliance state');
+                }
+            });
         });
     </script>
 </body>

@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import inspect, text
+from controls.relay import control_appliance
 import os, random, smtplib, datetime
 
 app = Flask(__name__)
@@ -10,6 +11,7 @@ DEFAULT_PRESET_LIMIT = 500.0
 PRESET_LIMIT_WATTS = DEFAULT_PRESET_LIMIT
 DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
 APPLIANCE_NAMES = DEFAULT_APPLIANCE_NAMES.copy()
+APPLIANCE_STATES = ["OFF", "OFF", "OFF"]
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SECRET_KEY'] = 'secret_key_here'
 db = SQLAlchemy(app)
@@ -81,6 +83,24 @@ def load_user(user_id):
 
 def normalize_email(email):
     return email.strip().lower()
+
+
+def normalize_appliance_states(states):
+    if not isinstance(states, list):
+        return None
+
+    cleaned = []
+    for item in states[:3]:
+        value = str(item).strip().upper()
+        if value in ("ON", "OFF"):
+            cleaned.append(value)
+        else:
+            cleaned.append("OFF")
+
+    while len(cleaned) < 3:
+        cleaned.append("OFF")
+
+    return cleaned[:3]
 
 
 def migrate_legacy_tables():
@@ -241,7 +261,7 @@ def reset():
 @login_required
 def dashboard():
     logs = Log.query.filter_by(user_id=current_user.id).all()
-    return render_template("dashboard.html", logs=logs)
+    return render_template("dashboard.html", logs=logs, appliance_names=APPLIANCE_NAMES, appliance_states=APPLIANCE_STATES)
 
 @app.route("/set-preset", methods=["POST"])
 @login_required
@@ -256,10 +276,33 @@ def set_preset():
     flash(f"Power limit set to {PRESET_LIMIT_WATTS} W.")
     return redirect(url_for("dashboard"))
 
-@app.route("/api/control", methods=["GET"])
+@app.route("/api/control", methods=["GET", "POST"])
 def api_control():
+    global APPLIANCE_STATES
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        states = payload.get("appliances") or payload.get("appliance_states")
+        normalized = normalize_appliance_states(states)
+        if normalized is None:
+            return jsonify({"error": "appliances must be a list of ON/OFF values"}), 400
+
+        APPLIANCE_STATES = normalized
+        for index, state in enumerate(APPLIANCE_STATES):
+            try:
+                control_appliance(index, state == "ON")
+            except Exception:
+                pass
+
+        return jsonify({
+            "appliances": APPLIANCE_STATES,
+            "preset_limit": PRESET_LIMIT_WATTS,
+            "appliance_names": APPLIANCE_NAMES,
+            "status": "updated"
+        })
+
     return jsonify({
-        "appliances": ["OFF", "OFF", "OFF"],
+        "appliances": APPLIANCE_STATES,
         "preset_limit": PRESET_LIMIT_WATTS,
         "appliance_names": APPLIANCE_NAMES
     })
