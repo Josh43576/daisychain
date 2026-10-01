@@ -8,7 +8,9 @@ Example usage:
     python pzem_multi_reader.py
 """
 
+import os
 import time
+
 import minimalmodbus
 
 # ----------------------
@@ -20,6 +22,32 @@ PARITY = "N"
 STOPBITS = 1
 BYTESIZE = 8
 TIMEOUT = 1.0
+
+# Optional RS485 DE/RE drive pin. Set RS485_DE_RE_PIN from the environment
+# when a hardware transceiver exposes a control GPIO. If not configured,
+# the code falls back to the normal UART A/B wiring used by the adapter.
+RS485_DE_RE_PIN = None
+pin_value = os.environ.get("RS485_DE_RE_PIN")
+if pin_value:
+    try:
+        RS485_DE_RE_PIN = int(pin_value)
+    except ValueError:
+        RS485_DE_RE_PIN = None
+
+
+def set_rs485_direction(transmit: bool):
+    """Enable the RS485 transmitter for writes and receiver mode for reads."""
+    if RS485_DE_RE_PIN is None:
+        return
+    try:
+        import RPi.GPIO as GPIO  # type: ignore
+
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(RS485_DE_RE_PIN, GPIO.OUT)
+        GPIO.output(RS485_DE_RE_PIN, GPIO.HIGH if transmit else GPIO.LOW)
+    except Exception:
+        pass
+
 
 # Each PZEM device has a unique Modbus slave ID.
 # Add or remove IDs as needed.

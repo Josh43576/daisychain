@@ -1,17 +1,59 @@
 import os
-import serial
 import struct
+import time
 
-__all__ = ["read_pzem", "read_all_pzem"]
+import serial
+
+__all__ = [
+    "PZEM_PORTS",
+    "PZEM_SLAVE_IDS",
+    "BAUDRATE",
+    "get_available_ports",
+    "build_modbus_request",
+    "calculate_crc",
+    "validate_modbus_response",
+    "read_pzem_register",
+    "read_pzem",
+    "read_all_pzem",
+]
 
 # Three appliance channels. Configure one port per PZEM sensor.
 # Prefer USB serial adapters for each sensor, and fall back to Pi UART devices.
 PZEM_PORTS = [
-    '/dev/ttyUSB0',
-    '/dev/ttyUSB1',
-    '/dev/ttyUSB2',
+    "/dev/ttyUSB0",
+    "/dev/ttyUSB1",
+    "/dev/ttyUSB2",
 ]
-UART_PORTS = ['/dev/serial0', '/dev/ttyAMA0', '/dev/ttyS0']
+UART_PORTS = ["/dev/serial0", "/dev/ttyAMA0", "/dev/ttyS0"]
+PZEM_SLAVE_IDS = [1, 2, 3]
+BAUDRATE = 9600
+SERIAL_TIMEOUT = 1.0
+
+# Optional RS485 transceiver GPIO pin. Configure by exporting RS485_DE_RE_PIN.
+# Example: export RS485_DE_RE_PIN=17 before running the service.
+RS485_DE_RE_PIN = None
+pin_value = os.environ.get("RS485_DE_RE_PIN")
+if pin_value:
+    try:
+        RS485_DE_RE_PIN = int(pin_value)
+    except ValueError:
+        RS485_DE_RE_PIN = None
+
+
+def set_rs485_direction(transmit: bool):
+    """Drive the RS485 DE/RE control line if a GPIO pin has been configured."""
+    if RS485_DE_RE_PIN is None:
+        return
+
+    try:
+        import RPi.GPIO as GPIO  # type: ignore
+
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(RS485_DE_RE_PIN, GPIO.OUT)
+        GPIO.output(RS485_DE_RE_PIN, GPIO.HIGH if transmit else GPIO.LOW)
+    except Exception:
+        # Hardware may not be present during testing or on non-Pi hosts.
+        pass
 
 
 def get_available_ports():
@@ -21,11 +63,9 @@ def get_available_ports():
         if os.path.exists(port):
             available.append(port)
 
-    # If only UART devices are available, use them in order for the three channels.
     if not available:
         return list(PZEM_PORTS)
 
-    # Keep exactly 3 appliance slots if possible.
     ports = []
     for port in available:
         if port not in ports:
@@ -34,17 +74,9 @@ def get_available_ports():
             break
     return ports
 
-# PZEM-004T Modbus RTU protocol commands
-PZEM_DEFAULT_ADDR = 0xF8
-PZEM_VOLTAGE_CMD = bytes([PZEM_DEFAULT_ADDR, 0x03, 0x00, 0x00, 0x00, 0x02, 0x3D, 0x30])
-PZEM_CURRENT_CMD = bytes([PZEM_DEFAULT_ADDR, 0x03, 0x00, 0x01, 0x00, 0x02, 0x3D, 0xC1])
-PZEM_POWER_CMD = bytes([PZEM_DEFAULT_ADDR, 0x03, 0x00, 0x03, 0x00, 0x02, 0x3D, 0x09])
-PZEM_ENERGY_CMD = bytes([PZEM_DEFAULT_ADDR, 0x03, 0x00, 0x05, 0x00, 0x02, 0x3C, 0x49])
 
 def calculate_crc(data):
-    """
-    Calculate CRC16-ModBus for PZEM protocol.
-    """
+    """Calculate the CRC16-Modbus value for a Modbus RTU frame."""
     crc = 0xFFFF
     for byte in data:
         crc ^= byte
@@ -53,65 +85,164 @@ def calculate_crc(data):
                 crc = (crc >> 1) ^ 0xA001
             else:
                 crc >>= 1
-    return struct.pack('<H', crc)
+    return struct.pack("<H", crc)
 
-def read_pzem_register(ser, command):
-    """
-    Send a command to PZEM sensor and read the response.
-    """
-    try:
-        ser.write(command)
-        response = ser.read(7)
-        if len(response) == 7:
-            return struct.unpack('>H', response[3:5])[0]
-    except Exception as e:
-        print(f"Error reading PZEM register: {e}")
-    return None
 
-def read_pzem(port):
-    """
-    Reads data from a single PZEM-004T sensor via Modbus RTU protocol.
-    Returns voltage (V), current (A), power (W), and energy (kWh).
-    """
+def build_modbus_request(slave_id: int, function_code: int, start_register: int, quantity: int) -> bytes:
+    """Build a Modbus RTU request for a given slave and register range."""
+    request = bytes([
+        slave_id,
+        function_code,
+        (start_register >> 8) & 0xFF,
+        start_register & 0xFF,
+        (quantity >> 8) & 0xFF,
+        quantity & 0xFF,
+    ])
+    return request + calculate_crc(request)
+
+
+def validate_modbus_response(response: bytes, expected_function_code: int) -> bytes:
+    """Validate Modbus RTU response size, CRC, and exception codes."""
+    if not isinstance(response, (bytes, bytearray)):
+        raise ValueError("Modbus response must be bytes or bytearray.")
+
+    frame = bytes(response)
+    if len(frame) < 5:
+        raise ValueError(f"Modbus RTU frame too short: {len(frame)} bytes")
+
+    if frame[1] & 0x80:
+        exception_code = frame[2]
+        raise ValueError(f"Modbus exception frame from slave {frame[0]}: code 0x{exception_code:02X}")
+
+    if frame[1] != expected_function_code:
+        raise ValueError(
+            f"Unexpected Modbus function code: expected 0x{expected_function_code:02X}, got 0x{frame[1]:02X}"
+        )
+
+    if len(frame) < 5:
+        raise ValueError("Modbus RTU response is incomplete")
+
+    actual_crc = frame[-2:]
+    expected_crc = calculate_crc(frame[:-2])
+    if actual_crc != expected_crc:
+        raise ValueError(
+            f"CRC mismatch in Modbus RTU response from slave {frame[0]}: "
+            f"expected {expected_crc.hex()} got {actual_crc.hex()}"
+        )
+
+    byte_count = frame[2]
+    expected_length = 5 + byte_count
+    if len(frame) != expected_length:
+        raise ValueError(
+            f"Unexpected Modbus RTU frame length: expected {expected_length}, got {len(frame)}"
+        )
+
+    return frame[3:-2]
+
+
+def _read_modbus_frame(ser, expected_function_code: int, timeout: float = None) -> bytes:
+    """Read until a complete RTU frame arrives or the serial timeout expires."""
+    deadline = time.monotonic() + (timeout if timeout is not None else max(float(ser.timeout), SERIAL_TIMEOUT))
+    frame = bytearray()
+
+    while time.monotonic() < deadline:
+        chunk = ser.read(1)
+        if not chunk:
+            if not frame:
+                continue
+            break
+        frame.extend(chunk)
+
+        if len(frame) >= 5:
+            function_code = frame[1]
+            if function_code & 0x80:
+                break
+            if function_code == expected_function_code:
+                byte_count = frame[2]
+                if len(frame) >= 5 + byte_count:
+                    break
+
+    if not frame:
+        raise TimeoutError("Timed out waiting for Modbus RTU response")
+
+    return bytes(frame)
+
+
+def read_pzem_register(ser, slave_id: int, register_address: int, quantity: int = 1, retries: int = 3):
+    """Send a Modbus RTU request and return the raw register payload."""
+    if not 1 <= slave_id <= 247:
+        raise ValueError(f"Slave ID must be between 1 and 247, got {slave_id}")
+
+    for attempt in range(1, retries + 1):
+        try:
+            ser.flushInput()
+            ser.flushOutput()
+            request = build_modbus_request(slave_id, 0x03, register_address, quantity)
+            set_rs485_direction(True)
+            ser.write(request)
+            ser.flush()
+            set_rs485_direction(False)
+
+            response = _read_modbus_frame(ser, 0x03, timeout=float(ser.timeout) if ser.timeout else SERIAL_TIMEOUT)
+            return validate_modbus_response(response, 0x03)
+        except (TimeoutError, OSError, ValueError, serial.SerialException) as exc:
+            if attempt >= retries:
+                raise RuntimeError(f"Modbus read failed for slave {slave_id} after {retries} attempts: {exc}") from exc
+            time.sleep(0.2 * attempt)
+
+    raise RuntimeError(f"Modbus read failed for slave {slave_id} without a valid response")
+
+
+def read_pzem(port, slave_id: int = 1):
+    """Read a single PZEM sensor using its configured Modbus slave ID."""
     try:
-        ser = serial.Serial(port, baudrate=9600, timeout=1)
-        
-        voltage = read_pzem_register(ser, PZEM_VOLTAGE_CMD)
-        current = read_pzem_register(ser, PZEM_CURRENT_CMD)
-        power = read_pzem_register(ser, PZEM_POWER_CMD)
-        energy = read_pzem_register(ser, PZEM_ENERGY_CMD)
-        
-        ser.close()
-        
-        # Convert to proper units (divide by 10 for voltage and current, divide by 10 for power)
-        result = {}
-        if voltage is not None:
-            result['voltage'] = voltage / 10.0  # V
-        if current is not None:
-            result['current'] = current / 100.0  # A
-        if power is not None:
-            result['power'] = power / 10.0  # W
-        if energy is not None:
-            result['energy'] = energy / 100.0  # kWh
-        
-        if result:
-            return result
-        else:
-            return {"error": "No valid data from sensor"}
-    except Exception as e:
-        return {"error": str(e)}
+        with serial.Serial(
+            port,
+            baudrate=BAUDRATE,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=SERIAL_TIMEOUT,
+        ) as ser:
+            voltage_payload = read_pzem_register(ser, slave_id, 0x0000, quantity=1)
+            current_payload = read_pzem_register(ser, slave_id, 0x0001, quantity=2)
+            power_payload = read_pzem_register(ser, slave_id, 0x0003, quantity=2)
+            energy_payload = read_pzem_register(ser, slave_id, 0x0005, quantity=2)
+
+        voltage = int.from_bytes(voltage_payload, byteorder="big", signed=False) / 10.0
+        current = int.from_bytes(current_payload, byteorder="big", signed=False) / 1000.0
+        power = int.from_bytes(power_payload, byteorder="big", signed=False) / 10.0
+        energy = int.from_bytes(energy_payload, byteorder="big", signed=False)
+
+        result = {
+            "slave_id": slave_id,
+            "voltage": voltage,
+            "current": current,
+            "power": power,
+            "energy": energy,
+            "error": None,
+        }
+        return result
+    except Exception as exc:
+        return {"slave_id": slave_id, "voltage": None, "current": None, "power": None, "energy": None, "error": str(exc)}
+
 
 def read_all_pzem():
-    """
-    Reads all connected PZEM sensors and returns a list of readings.
-    Three appliance channels are supported: one sensor per appliance channel.
-    """
+    """Read all connected PZEM sensors using their configured slave IDs."""
     readings = []
-    for port in get_available_ports():
-        readings.append(read_pzem(port))
+    available_ports = get_available_ports()
+    for index, port in enumerate(available_ports):
+        slave_id = PZEM_SLAVE_IDS[index] if index < len(PZEM_SLAVE_IDS) else index + 1
+        readings.append(read_pzem(port, slave_id=slave_id))
 
-    # Keep the structure stable for 3 channels even if one sensor is missing.
     while len(readings) < 3:
-        readings.append({"error": "No PZEM sensor detected on this channel"})
+        readings.append({
+            "slave_id": len(readings) + 1,
+            "voltage": None,
+            "current": None,
+            "power": None,
+            "energy": None,
+            "error": "No PZEM sensor detected on this channel",
+        })
 
     return readings[:3]
