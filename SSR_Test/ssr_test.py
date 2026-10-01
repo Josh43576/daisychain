@@ -1,32 +1,43 @@
-import RPi.GPIO as GPIO
 import time
+import RPi.GPIO as GPIO
 
-# This is a simple hardware test for a Solid State Relay (SSR).
-# It does NOT use the website, Flask app, RFID system, sensors, or the existing project code.
-# This program is meant to test the SSR by itself on the Raspberry Pi.
 
-# Use BCM numbering for the GPIO pins.
-# BCM numbering is the standard Raspberry Pi GPIO numbering system.
-GPIO.setmode(GPIO.BCM)
+def run_ssr_test():
+    # BCM numbering for the GPIO pins.
+    GPIO.setmode(GPIO.BCM)
 
-# Test GPIO 17 first.
-# This pin is the one we will use to control the SSR input.
-GPIO.setup(17, GPIO.OUT)
+    warn = getattr(GPIO, "setwarnings", None)
+    if callable(warn):
+        warn(False)
 
-# Turn GPIO 17 ON.
-# If the SSR input is active-high, this should trigger the SSR.
-print("GPIO 17 ON: sending HIGH signal to the SSR...")
-GPIO.output(17, GPIO.HIGH)
+    # GPIO 17 = Physical Pin 11
+    # GPIO 27 = Physical Pin 13
+    # GPIO 22 = Physical Pin 15
+    relay_pins = [17, 27, 22]
 
-# Keep the signal ON for about 10 seconds so you can check the hardware.
-time.sleep(10)
+    try:
+        for pin in relay_pins:
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, GPIO.LOW)
 
-# Turn GPIO 17 OFF after the test period.
-print("GPIO 17 OFF: sending LOW signal to the SSR...")
-GPIO.output(17, GPIO.LOW)
+        for pin in relay_pins:
+            print(f"GPIO {pin} ON: sending HIGH signal to the SSR...")
+            GPIO.output(pin, GPIO.HIGH)
+            time.sleep(10)
 
-# Clean up the GPIO configuration when the test finishes.
-# This is important so the pin is reset properly.
-GPIO.cleanup()
+            print(f"GPIO {pin} OFF: sending LOW signal to the SSR...")
+            GPIO.output(pin, GPIO.LOW)
+            time.sleep(2)
 
-print("GPIO test complete. The SSR should have been activated and then turned off.")
+        print("GPIO 17, 27, and 22 test complete.")
+        print("GPIO 17 = Physical Pin 11")
+        print("GPIO 27 = Physical Pin 13")
+        print("GPIO 22 = Physical Pin 15")
+
+    finally:
+        GPIO.cleanup()
+        print("GPIO cleanup complete.")
+
+
+if __name__ == "__main__":
+    run_ssr_test()
