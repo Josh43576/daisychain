@@ -10,6 +10,7 @@ Example usage:
 
 import os
 import time
+from contextlib import suppress
 
 import minimalmodbus
 
@@ -39,14 +40,12 @@ def set_rs485_direction(transmit: bool):
     """Enable the RS485 transmitter for writes and receiver mode for reads."""
     if RS485_DE_RE_PIN is None:
         return
-    try:
+    with suppress(Exception):
         import RPi.GPIO as GPIO  # type: ignore
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(RS485_DE_RE_PIN, GPIO.OUT)
         GPIO.output(RS485_DE_RE_PIN, GPIO.HIGH if transmit else GPIO.LOW)
-    except Exception:
-        pass
 
 
 # Each PZEM device has a unique Modbus slave ID.
@@ -111,26 +110,20 @@ def read_pzem_module(slave_id: int):
     try:
         result["current"] = read_current(instrument)
     except Exception as exc:
-        if result["error"] is None:
-            result["error"] = f"Current read failed: {exc}"
-        else:
-            result["error"] += f" | Current read failed: {exc}"
+        message = f"Current read failed: {exc}"
+        result["error"] = (result["error"] or "") + (" | " if result["error"] else "") + message
 
     try:
         result["power"] = read_power(instrument)
     except Exception as exc:
-        if result["error"] is None:
-            result["error"] = f"Power read failed: {exc}"
-        else:
-            result["error"] += f" | Power read failed: {exc}"
+        message = f"Power read failed: {exc}"
+        result["error"] = (result["error"] or "") + (" | " if result["error"] else "") + message
 
     try:
         result["energy"] = read_energy(instrument)
     except Exception as exc:
-        if result["error"] is None:
-            result["error"] = f"Energy read failed: {exc}"
-        else:
-            result["error"] += f" | Energy read failed: {exc}"
+        message = f"Energy read failed: {exc}"
+        result["error"] = (result["error"] or "") + (" | " if result["error"] else "") + message
 
     return result
 

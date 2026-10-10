@@ -54,7 +54,7 @@ def init(pins=None):
         GPIO.setmode(GPIO.BCM)
         for pin in relay_pins:
             GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.LOW)
+            GPIO.output(pin, GPIO.HIGH)
         _relays_initialized = True
         return True
     except Exception as e:

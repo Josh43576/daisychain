@@ -8,7 +8,8 @@ import signal
 import sys
 import os
 import json
-from datetime import datetime
+from contextlib import suppress
+from datetime import datetime, timezone
 
 # Global flag for graceful shutdown
 shutdown_requested = False
@@ -21,6 +22,20 @@ history_file = os.path.join(os.path.dirname(__file__), "daily_usage_history.json
 config_file = os.path.join(os.path.dirname(__file__), "appliance_config.json")
 DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
 appliance_names = DEFAULT_APPLIANCE_NAMES.copy()
+BASELINE_MODE = True
+appliance_limits = {"acu": 10.0, "outlet": 5.0, "lighting": 2.0}
+appliance_pins = {"acu": 17, "outlet": 27, "lighting": 22}
+appliance_index = {"acu": 0, "outlet": 1, "lighting": 2}
+
+try:
+    import RPi.GPIO as GPIO  # type: ignore
+except ModuleNotFoundError:
+    GPIO = None
+
+
+def utc_now():
+    """Return a timezone-aware UTC timestamp for persisted records."""
+    return datetime.now(timezone.utc)
 
 
 def load_appliance_names():
@@ -36,7 +51,7 @@ def load_appliance_names():
                 appliance_names = [str(name).strip() or f"Appliance {i + 1}" for i, name in enumerate(names)]
                 return appliance_names
     except Exception:
-        pass
+        return appliance_names
     return appliance_names
 
 
@@ -58,7 +73,7 @@ def configure_appliance_names():
     print("Configure appliance types before starting the system.")
     for i in range(3):
         user_input = input(f"Enter appliance {i + 1} type (example: Refrigerator, AC, Lights): ").strip()
-        names[i] = user_input if user_input else f"Appliance {i + 1}"
+        names[i] = user_input or f"Appliance {i + 1}"
 
     appliance_names = names
     save_appliance_names(appliance_names)
@@ -90,7 +105,7 @@ def save_daily_state():
     """Persist the active daily counter."""
     payload = {
         "daily_energy_kwh": daily_energy_kwh,
-        "updated_at": datetime.utcnow().isoformat()
+        "updated_at": utc_now().isoformat(),
     }
     with open(state_file, "w") as file:
         json.dump(payload, file)
@@ -107,7 +122,7 @@ def append_history(event_type, message, value_watts=0.0, preset_limit=0.0):
             history = []
 
     history.append({
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utc_now().isoformat(),
         "event_type": event_type,
         "message": message,
         "value_watts": value_watts,
@@ -177,10 +192,8 @@ def update_daily_energy(readings):
     global daily_energy_kwh
     total = 0.0
     for reading in readings:
-        try:
+        with suppress(TypeError, ValueError):
             total += float(reading.get("energy", 0.0))
-        except (TypeError, ValueError):
-            pass
     daily_energy_kwh = total
     save_daily_state()
     return total
@@ -200,17 +213,28 @@ def main():
     initialize_lcd()
     # Initialize GPIO-controlled relays and RFID reader (deferred init)
     init_relays()
+    for channel_index in range(3):
+        control_appliance(channel_index, True)
     init_reader()
 
     try:
         while not shutdown_requested:
-            # 1. Read sensors
             readings = read_all_pzem()
             print("Sensor Readings:", readings)
 
             # 2. Update daily total before checking trip condition
             current_daily_energy = update_daily_energy(readings)
             print(f"Current daily energy: {current_daily_energy} kWh")
+
+            if BASELINE_MODE:
+                print("BASELINE_MODE active: keeping all relay lines HIGH for the 7-day data collection window.")
+                for channel_index in range(3):
+                    control_appliance(channel_index, True)
+                    if GPIO is not None:
+                        GPIO.output(appliance_pins.get(list(appliance_pins)[channel_index], 17), GPIO.HIGH)
+                send_to_server(readings)
+                time.sleep(5)
+                continue
 
             # 3. RFID authentication for system access
             user_ok = check_user()
@@ -230,32 +254,32 @@ def main():
             appliances = commands.get("appliances", [])
             # Use locally configured appliance_names; only sync with Flask if explicitly set
             flask_names = commands.get("appliance_names", appliance_names)
-            if flask_names != appliance_names and flask_names != DEFAULT_APPLIANCE_NAMES:
+            if flask_names not in (appliance_names, DEFAULT_APPLIANCE_NAMES):
                 appliance_names = flask_names  # Update if Flask has new names
-            preset_limit = float(commands.get("preset_limit", 500.0))
-            # Ensure active_limit is a float and fallback to preset_limit if override is None
-            active_limit = float(admin_override_limit) if (admin_override_active and admin_override_limit is not None) else preset_limit
 
-            # 7. Check each sensor against the effective power limit
-            for i, reading in enumerate(readings):
+            # 7. Check each device against its independent limit threshold.
+            for device_name, limit_kwh in appliance_limits.items():
+                index = appliance_index.get(device_name, 0)
+                if index >= len(readings):
+                    continue
+                reading = readings[index]
                 try:
-                    power_value = float(reading.get("power", 0))
+                    energy_kwh = float(reading.get("energy", 0.0))
                 except (TypeError, ValueError):
-                    power_value = 0.0
+                    energy_kwh = 0.0
+                if energy_kwh > 1000.0:
+                    energy_kwh = energy_kwh / 1000.0
 
-                if power_value > active_limit:
+                if energy_kwh >= limit_kwh:
                     print(
-                        f"Power limit exceeded: {power_value}W > {active_limit}W. Checking for admin bypass..."
+                        f"{device_name.upper()} limit breached: {energy_kwh:.2f}kWh >= {limit_kwh:.2f}kWh. Cutting power on pin {appliance_pins.get(device_name, 17)}."
                     )
-
-                    if handle_admin_bypass(preset_limit):
-                        print("System allowed through admin bypass or daily reset.")
-                        continue
-
-                    print(f"Power limit exceeded: Appliance {i+1} at {power_value}W > {preset_limit}W. Cutting power.")
-                    append_history("preset_cutoff", "Preset limit exceeded. Relay cut power.", value_watts=power_value, preset_limit=preset_limit)
-                    control_appliance(i, False)
-                    appliances[i] = "OFF"
+                    if GPIO is not None:
+                        GPIO.output(appliance_pins.get(device_name, 17), GPIO.LOW)
+                    control_appliance(index, False)
+                    if index < len(appliances):
+                        appliances[index] = "OFF"
+                    append_history("preset_cutoff", f"{device_name.upper()} preset limit exceeded. Relay cut power.", value_watts=float(reading.get("power", 0.0)), preset_limit=limit_kwh)
 
             # 8. Apply relay control from web commands
             for i, cmd in enumerate(appliances):
@@ -270,10 +294,8 @@ def main():
             if admin_override_active and admin_override_limit is not None:
                 total_power = 0.0
                 for reading in readings:
-                    try:
+                    with suppress(TypeError, ValueError):
                         total_power += float(reading.get("power", 0))
-                    except (TypeError, ValueError):
-                        pass
                 if total_power < admin_override_limit * 0.9:
                     admin_override_active = False
                     admin_override_limit = None
@@ -293,3 +315,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

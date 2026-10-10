@@ -261,7 +261,16 @@ def reset():
 @login_required
 def dashboard():
     logs = Log.query.filter_by(user_id=current_user.id).all()
-    return render_template("dashboard.html", logs=logs, appliance_names=APPLIANCE_NAMES, appliance_states=APPLIANCE_STATES)
+    display_name = (current_user.name or current_user.email or "Admin").strip()
+    if not display_name or display_name == "Admin":
+        display_name = (current_user.email or "Admin").split("@", 1)[0].title()
+    return render_template(
+        "dashboard.html",
+        logs=logs,
+        appliance_names=APPLIANCE_NAMES,
+        appliance_states=APPLIANCE_STATES,
+        user_display_name=display_name,
+    )
 
 @app.route("/set-preset", methods=["POST"])
 @login_required
@@ -319,10 +328,7 @@ def api_config():
 
         cleaned = []
         for item in names:
-            label = str(item).strip()
-            if not label:
-                label = f"Appliance {len(cleaned) + 1}"
-            cleaned.append(label)
+            cleaned.append(str(item).strip() or f"Appliance {len(cleaned) + 1}")
 
         APPLIANCE_NAMES = cleaned
         return jsonify({"appliance_names": APPLIANCE_NAMES, "status": "updated"})

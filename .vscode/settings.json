@@ -1,4 +1,33 @@
 {
-  "python.defaultInterpreterPath": "c:\\Users\\Joshua\\OneDrive\\Documents\\Codes\\final web\\.venv\\Scripts\\python.exe",
-  "python.terminal.activateEnvironment": true
+  "python.defaultInterpreterPath": "c:\\Users\\Joshua\\OneDrive\\Documents\\Codes\\Project Root Website\\Raspberry Pi\\venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "wolf.disableHotModeWarning": true,
+  "cSpell.enabled": true,
+  "cSpell.words": [
+    "appliance",
+    "appliances",
+    "Flask",
+    "GPIO",
+    "I2C",
+    "IoT",
+    "kwh",
+    "LCD",
+    "mfrc522",
+    "Modbus",
+    "MPI3508",
+    "neon",
+    "PZEM",
+    "pyserial",
+    "RFID",
+    "Raspberry",
+    "RS485",
+    "RTU",
+    "smbus2",
+    "spidev",
+    "SQLAlchemy",
+    "watts",
+    "watt",
+    "GPIO",
+    "Pi"
+  ]
 }

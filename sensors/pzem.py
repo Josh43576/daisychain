@@ -1,8 +1,12 @@
 import os
 import struct
 import time
+from contextlib import suppress
 
-import serial
+try:
+    import serial
+except ModuleNotFoundError:  # pragma: no cover - exercised via import-time dependency guard
+    serial = None
 
 __all__ = [
     "PZEM_PORTS",
@@ -17,12 +21,10 @@ __all__ = [
     "read_all_pzem",
 ]
 
-# Three appliance channels. Configure one port per PZEM sensor.
-# Prefer USB serial adapters for each sensor, and fall back to Pi UART devices.
+# One RS485 bus with 3 PZEM modules on distinct Modbus slave IDs.
+# Keep a single serial port and poll the devices sequentially.
 PZEM_PORTS = [
     "/dev/ttyUSB0",
-    "/dev/ttyUSB1",
-    "/dev/ttyUSB2",
 ]
 UART_PORTS = ["/dev/serial0", "/dev/ttyAMA0", "/dev/ttyS0"]
 PZEM_SLAVE_IDS = [1, 2, 3]
@@ -45,23 +47,17 @@ def set_rs485_direction(transmit: bool):
     if RS485_DE_RE_PIN is None:
         return
 
-    try:
+    with suppress(Exception):
         import RPi.GPIO as GPIO  # type: ignore
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(RS485_DE_RE_PIN, GPIO.OUT)
         GPIO.output(RS485_DE_RE_PIN, GPIO.HIGH if transmit else GPIO.LOW)
-    except Exception:
-        # Hardware may not be present during testing or on non-Pi hosts.
-        pass
 
 
 def get_available_ports():
     """Return the serial ports available for the 3 PZEM sensors."""
-    available = []
-    for port in PZEM_PORTS + UART_PORTS:
-        if os.path.exists(port):
-            available.append(port)
+    available = [port for port in PZEM_PORTS + UART_PORTS if os.path.exists(port)]
 
     if not available:
         return list(PZEM_PORTS)
@@ -188,7 +184,7 @@ def read_pzem_register(ser, slave_id: int, register_address: int, quantity: int 
             if len(response) < 5:
                 raise ValueError("Too short Modbus RTU response")
             return validate_modbus_response(response, function_code)
-        except (TimeoutError, OSError, ValueError, serial.SerialException) as exc:
+        except Exception as exc:
             if attempt >= retries:
                 raise RuntimeError(f"Modbus read failed for slave {slave_id} after {retries} attempts: {exc}") from exc
             time.sleep(0.2 * attempt)
@@ -198,6 +194,16 @@ def read_pzem_register(ser, slave_id: int, register_address: int, quantity: int 
 
 def read_pzem(port, slave_id: int = 1):
     """Read a single PZEM sensor using its configured Modbus slave ID."""
+    if serial is None:
+        return {
+            "slave_id": slave_id,
+            "voltage": None,
+            "current": None,
+            "power": None,
+            "energy": None,
+            "error": "pyserial is not installed; install the project dependencies to read PZEM sensors.",
+        }
+
     try:
         with serial.Serial(
             port,
@@ -217,7 +223,7 @@ def read_pzem(port, slave_id: int = 1):
         power = int.from_bytes(power_payload, byteorder="big", signed=False) / 10.0
         energy = int.from_bytes(energy_payload, byteorder="big", signed=False)
 
-        result = {
+        return {
             "slave_id": slave_id,
             "voltage": voltage,
             "current": current,
@@ -225,17 +231,17 @@ def read_pzem(port, slave_id: int = 1):
             "energy": energy,
             "error": None,
         }
-        return result
     except Exception as exc:
         return {"slave_id": slave_id, "voltage": None, "current": None, "power": None, "energy": None, "error": str(exc)}
 
 
 def read_all_pzem():
-    """Read all connected PZEM sensors using their configured slave IDs."""
+    """Read all PZEM sensors on one Modbus-RTU bus by polling slave IDs 1..3 sequentially."""
     readings = []
     available_ports = get_available_ports()
-    for index, port in enumerate(available_ports):
-        slave_id = PZEM_SLAVE_IDS[index] if index < len(PZEM_SLAVE_IDS) else index + 1
+    port = available_ports[0] if available_ports else PZEM_PORTS[0]
+
+    for slave_id in PZEM_SLAVE_IDS:
         readings.append(read_pzem(port, slave_id=slave_id))
 
     while len(readings) < 3:
