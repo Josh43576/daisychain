@@ -19,9 +19,9 @@ class TestPzemModbus(unittest.TestCase):
         self.assertEqual(PZEM_PORTS, ["/dev/ttyUSB0"])
 
     def test_build_modbus_request_uses_slave_id(self):
-        frame = build_modbus_request(2, 0x03, 0x0003, 2)
+        frame = build_modbus_request(2, 0x04, 0x0003, 2)
         self.assertEqual(frame[0], 2)
-        self.assertEqual(frame[1], 0x03)
+        self.assertEqual(frame[1], 0x04)
         self.assertEqual(frame[2], 0x00)
         self.assertEqual(frame[3], 0x03)
         self.assertEqual(frame[4], 0x00)
@@ -30,23 +30,27 @@ class TestPzemModbus(unittest.TestCase):
 
     def test_valid_crc_response_is_accepted(self):
         payload = b"\x00\x10\x00\x20"
-        frame = b"\x02\x03\x04" + payload + calculate_crc(b"\x02\x03\x04" + payload)
-        self.assertEqual(validate_modbus_response(frame, 0x03), payload)
+        frame = b"\x02\x04\x04" + payload + calculate_crc(b"\x02\x04\x04" + payload)
+        self.assertEqual(validate_modbus_response(frame, 0x04), payload)
 
     def test_exception_frame_is_rejected(self):
-        frame = b"\x02\x83\x02" + calculate_crc(b"\x02\x83\x02")
+        frame = b"\x02\x84\x02" + calculate_crc(b"\x02\x84\x02")
         with self.assertRaises(ValueError):
-            validate_modbus_response(frame, 0x03)
+            validate_modbus_response(frame, 0x04)
 
     def test_module_imports_without_serial_package(self):
         import importlib
 
-        sys.modules.pop("sensors.pzem", None)
-        with patch.dict(sys.modules, {"serial": None}):
-            module = importlib.import_module("sensors.pzem")
-            self.assertTrue(callable(module.calculate_crc))
-            self.assertTrue(callable(module.build_modbus_request))
-        sys.modules.pop("sensors.pzem", None)
+        original_module = sys.modules.pop("sensors.pzem", None)
+        try:
+            with patch.dict(sys.modules, {"serial": None}):
+                module = importlib.import_module("sensors.pzem")
+                self.assertTrue(callable(module.calculate_crc))
+                self.assertTrue(callable(module.build_modbus_request))
+        finally:
+            sys.modules.pop("sensors.pzem", None)
+            if original_module is not None:
+                sys.modules["sensors.pzem"] = original_module
 
 
 if __name__ == "__main__":

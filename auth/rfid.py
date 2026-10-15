@@ -1,3 +1,4 @@
+import os
 import time
 
 try:
@@ -5,13 +6,23 @@ try:
 except ModuleNotFoundError:
     GPIO = None
 
+if os.environ.get("SIMULATE_HARDWARE") == "1":
+    GPIO = None
+
 try:
     from mfrc522 import SimpleMFRC522
 except ModuleNotFoundError:
-    class SimpleMFRC522:
-        def read(self):
-            print("RFID mock: no hardware detected. Returning default allowed access.")
-            return (1234567890, "mock-card")
+    SimpleMFRC522 = None
+
+if os.environ.get("SIMULATE_HARDWARE") == "1":
+    SimpleMFRC522 = None
+
+
+class _SimulatedRFIDReader:
+    def read(self):
+        card_id = int(os.environ.get("SIMULATED_RFID_ID", "1234567890"))
+        print("SIMULATION ONLY: returning configured simulated RFID ID")
+        return card_id, "simulation"
 
 # Lazy reader instance; initialization deferred to runtime to avoid import-time SPI errors
 reader = None
@@ -28,6 +39,12 @@ def init_reader():
     global reader
     if reader is not None:
         return True
+    if SimpleMFRC522 is None:
+        if os.environ.get("SIMULATE_HARDWARE") == "1":
+            reader = _SimulatedRFIDReader()
+            return True
+        print("RFID library unavailable; access will fail closed.")
+        return False
     try:
         reader = SimpleMFRC522()
         return True

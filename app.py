@@ -1,24 +1,35 @@
+import hmac
+import math
+import os, secrets, smtplib, datetime
+
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import inspect, text, or_
-from controls.relay import control_appliance
-import os, random, smtplib, datetime, math
 
 app = Flask(__name__)
 DEFAULT_PRESET_LIMIT = 500.0
-PRESET_LIMIT_WATTS = DEFAULT_PRESET_LIMIT
-DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
 DEFAULT_APPLIANCE_CONFIGS = {
     "acu": {"display_name": "ACU Unit", "kw_limit": 10.0},
     "outlet": {"display_name": "3-Gang Outlet", "kw_limit": 5.0},
     "lighting": {"display_name": "Lighting Circuit", "kw_limit": 2.0},
 }
-APPLIANCE_NAMES = DEFAULT_APPLIANCE_NAMES.copy()
-APPLIANCE_STATES = ["OFF", "OFF", "OFF"]
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
-app.config['SECRET_KEY'] = 'secret_key_here'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or secrets.token_hex(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE') == '1',
+    MAX_CONTENT_LENGTH=32 * 1024,
+)
+
+
+def utcnow_naive():
+    """Return UTC time as naive datetime for compatibility with existing SQLite rows."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 # Pylance may complain about assignment types here; ignore the checker for this runtime assignment
@@ -36,6 +47,7 @@ class User(UserMixin, db.Model):
     age = db.Column(db.Integer)
     address = db.Column(db.String(200))
     verified = db.Column(db.Boolean, default=False)
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)
     def __init__(self, email: str, name: str | None = None, birthday: str | None = None, age: int | str | None = None, address: str | None = None, **kwargs):
         # Provide an explicit constructor so static checkers (Pylance) recognize these parameters
         super().__init__(**kwargs)
@@ -60,13 +72,16 @@ class User(UserMixin, db.Model):
 
 class Log(db.Model):
     __tablename__ = "logs"
+    __table_args__ = (db.Index("ix_logs_date_recorded", "date_recorded"),)
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     voltage = db.Column(db.Float)
     current = db.Column(db.Float)
     power = db.Column(db.Float)
-    date_recorded = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    slave_id = db.Column(db.Integer)
+    energy = db.Column(db.Float)
+    date_recorded = db.Column(db.DateTime, default=utcnow_naive)
 
     user = db.relationship("User", backref=db.backref("logs", lazy=True))
 
@@ -79,7 +94,8 @@ class ApplianceConfig(db.Model):
     display_name = db.Column(db.String(100), nullable=False)
     kw_limit = db.Column(db.Float, default=10.0, nullable=False)
     is_tripped = db.Column(db.Boolean, default=False)
-    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    requested_state = db.Column(db.String(3), nullable=False, default='OFF')
+    updated_at = db.Column(db.DateTime, default=utcnow_naive)
 
 
 class PowerEvent(db.Model):
@@ -90,7 +106,40 @@ class PowerEvent(db.Model):
     value_watts = db.Column(db.Float, default=0.0)
     preset_limit = db.Column(db.Float, default=0.0)
     message = db.Column(db.String(255), default="")
-    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow_naive)
+
+
+class VerificationCode(db.Model):
+    __tablename__ = "verification_codes"
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(150), nullable=False, index=True)
+    purpose = db.Column(db.String(20), nullable=False)
+    code_hash = db.Column(db.String(256), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+
+
+class SystemSettings(db.Model):
+    __tablename__ = 'system_settings'
+    id = db.Column(db.Integer, primary_key=True)
+    preset_limit_watts = db.Column(db.Float, nullable=False, default=DEFAULT_PRESET_LIMIT)
+
+
+def get_preset_limit():
+    settings = db.session.get(SystemSettings, 1)
+    if settings is None:
+        settings = SystemSettings(id=1, preset_limit_watts=DEFAULT_PRESET_LIMIT)
+        db.session.add(settings)
+        db.session.commit()
+    try:
+        value = float(settings.preset_limit_watts)
+    except (TypeError, ValueError):
+        value = float('nan')
+    if not math.isfinite(value) or value <= 0:
+        settings.preset_limit_watts = DEFAULT_PRESET_LIMIT
+        db.session.commit()
+        return DEFAULT_PRESET_LIMIT
+    return value
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -116,6 +165,7 @@ def convert_wh_to_kwh(raw_wh):
 
 
 def ensure_appliance_configs():
+    changed = False
     for appliance_key, config in DEFAULT_APPLIANCE_CONFIGS.items():
         existing = ApplianceConfig.query.filter_by(appliance_key=appliance_key).first()
         if existing is None:
@@ -124,17 +174,36 @@ def ensure_appliance_configs():
                 display_name=config["display_name"],
                 kw_limit=float(config["kw_limit"]),
                 is_tripped=False,
+                requested_state='OFF',
             ))
+            changed = True
         else:
-            existing.display_name = config["display_name"] if not existing.display_name else existing.display_name
-            existing.kw_limit = float(config["kw_limit"]) if existing.kw_limit is None else existing.kw_limit
-            existing.updated_at = datetime.datetime.utcnow()
-    db.session.commit()
+            if not existing.display_name:
+                existing.display_name = config["display_name"]
+                changed = True
+            if existing.kw_limit is None:
+                existing.kw_limit = float(config["kw_limit"])
+                changed = True
+            if not existing.requested_state:
+                existing.requested_state = 'OFF'
+                changed = True
+            try:
+                existing_limit = float(existing.kw_limit)
+            except (TypeError, ValueError):
+                existing_limit = float('nan')
+            if not math.isfinite(existing_limit) or existing_limit <= 0:
+                existing.kw_limit = float(config['kw_limit'])
+                changed = True
+            if existing.requested_state not in ('ON', 'OFF'):
+                existing.requested_state = 'OFF'
+                changed = True
+    if changed:
+        db.session.commit()
 
 
 def get_appliance_configs():
     ensure_appliance_configs()
-    entries = ApplianceConfig.query.order_by(ApplianceConfig.id).all()
+    entries = [ApplianceConfig.query.filter_by(appliance_key=key).first() for key in DEFAULT_APPLIANCE_CONFIGS]
     payload = {}
     for entry in entries:
         payload[entry.appliance_key] = {
@@ -152,21 +221,95 @@ def get_appliance_configs():
 
 
 def normalize_appliance_states(states):
-    if not isinstance(states, list):
+    if not isinstance(states, list) or len(states) != 3:
         return None
 
     cleaned = []
-    for item in states[:3]:
+    for item in states:
         value = str(item).strip().upper()
-        if value in ("ON", "OFF"):
-            cleaned.append(value)
-        else:
-            cleaned.append("OFF")
-
-    while len(cleaned) < 3:
-        cleaned.append("OFF")
+        if value not in ("ON", "OFF"):
+            return None
+        cleaned.append(value)
 
     return cleaned[:3]
+
+
+def ordered_appliance_configs():
+    ensure_appliance_configs()
+    return [ApplianceConfig.query.filter_by(appliance_key=key).first() for key in DEFAULT_APPLIANCE_CONFIGS]
+
+
+def device_token_valid():
+    expected = os.environ.get('DEVICE_API_TOKEN', '')
+    if app.testing:
+        return True
+    supplied = request.headers.get('Authorization', '')
+    return bool(expected) and hmac.compare_digest(supplied, f'Bearer {expected}')
+
+
+def require_device_token():
+    if not device_token_valid():
+        return jsonify({'error': 'device authentication required'}), 401
+    return None
+
+
+def csrf_valid():
+    expected = session.get('csrf_token', '')
+    supplied = request.headers.get('X-CSRFToken', '') or request.form.get('csrf_token', '')
+    return bool(expected) and hmac.compare_digest(expected, supplied)
+
+
+@app.context_processor
+def inject_csrf_token():
+    session.setdefault('csrf_token', secrets.token_urlsafe(32))
+    return {'csrf_token': session['csrf_token']}
+
+
+@app.before_request
+def protect_browser_posts():
+    if request.method != 'POST':
+        return None
+    device_write_paths = {'/api/data', '/api/device-trip', '/api/power-events', '/api/config'}
+    if request.path in device_write_paths:
+        return None  # These routes validate the Pi bearer token themselves.
+    if not csrf_valid():
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'valid CSRF token required'}), 403
+        return 'Invalid CSRF token', 403
+    return None
+
+
+def migrate_schema():
+    """Add columns introduced after the original SQLite schema was created."""
+    inspector = inspect(db.engine)
+    tables = inspector.get_table_names()
+    if 'logs' in tables:
+        columns = {column['name'] for column in inspector.get_columns('logs')}
+        if 'slave_id' not in columns:
+            db.session.execute(text('ALTER TABLE logs ADD COLUMN slave_id INTEGER'))
+        if 'energy' not in columns:
+            db.session.execute(text('ALTER TABLE logs ADD COLUMN energy FLOAT'))
+        db.session.execute(text('CREATE INDEX IF NOT EXISTS ix_logs_date_recorded ON logs(date_recorded)'))
+    if 'users' in tables:
+        columns = {column['name'] for column in inspector.get_columns('users')}
+        if 'is_admin' not in columns:
+            db.session.execute(text('ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 1'))
+    if 'appliance_configs' in tables:
+        columns = {column['name'] for column in inspector.get_columns('appliance_configs')}
+        if 'requested_state' not in columns:
+            db.session.execute(text("ALTER TABLE appliance_configs ADD COLUMN requested_state VARCHAR(3) NOT NULL DEFAULT 'OFF'"))
+    db.session.commit()
+
+
+@app.cli.command('init-db')
+def init_db_command():
+    """Create tables and safely migrate the original SQLite schema."""
+    migrate_legacy_tables()
+    db.create_all()
+    migrate_schema()
+    ensure_appliance_configs()
+    get_preset_limit()
+    print('Database initialized.')
 
 
 def migrate_legacy_tables():
@@ -174,6 +317,9 @@ def migrate_legacy_tables():
         tables = inspect(db.engine).get_table_names()
         if "user" in tables and "users" not in tables:
             db.session.execute(text("ALTER TABLE user RENAME TO users"))
+        if "log" in tables and "logs" not in tables:
+            db.session.execute(text("ALTER TABLE log RENAME TO logs"))
+        if "user" in tables or "log" in tables:
             db.session.commit()
 
 
@@ -185,7 +331,7 @@ def send_verification_email(to_email, code):
         return False
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
             server.starttls()
             server.login(username, password)
             server.sendmail(username, to_email,
@@ -203,7 +349,7 @@ def send_reset_email(to_email, code):
         return False
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
             server.starttls()
             server.login(username, password)
             server.sendmail(username, to_email,
@@ -211,6 +357,31 @@ def send_reset_email(to_email, code):
         return True
     except Exception:
         return False
+
+
+def issue_verification_code(email, purpose):
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    item = VerificationCode.query.filter_by(email=email, purpose=purpose).first()
+    if item is None:
+        item = VerificationCode(email=email, purpose=purpose, code_hash="", expires_at=utcnow_naive())
+        db.session.add(item)
+    item.code_hash = generate_password_hash(code)
+    item.expires_at = utcnow_naive() + datetime.timedelta(minutes=10)
+    item.attempts = 0
+    db.session.commit()
+    return code
+
+
+def consume_verification_code(email, purpose, code):
+    item = VerificationCode.query.filter_by(email=email, purpose=purpose).first()
+    if item is None or item.attempts >= 5 or item.expires_at < utcnow_naive():
+        return False
+    item.attempts += 1
+    valid = check_password_hash(item.code_hash, str(code))
+    if valid:
+        db.session.delete(item)
+    db.session.commit()
+    return valid
 
 # ------------------ ROUTES ------------------
 @app.route("/")
@@ -220,34 +391,49 @@ def home():
 @app.route("/register", methods=["GET","POST"])
 def register():
     if request.method == "POST":
-        email = normalize_email(request.form["email"])
-        password = request.form["password"]
+        email = normalize_email(request.form.get("email", ""))
+        password = request.form.get("password", "")
         confirm_password = request.form.get("confirm_password", "")
-        name = request.form["name"]
-        birthday = request.form["birthday"]
-        age = request.form["age"]
-        address = request.form["address"]
+        name = request.form.get("name", "").strip()
+        birthday = request.form.get("birthday", "")
+        age = request.form.get("age", "")
+        address = request.form.get("address", "")
+
+        if not email or not name:
+            flash("Email and name are required.")
+            return render_template("register.html")
 
         if password != confirm_password:
             flash("Passwords do not match. Please re-enter both fields.")
+            return render_template("register.html")
+        if len(password) < 10:
+            flash("Password must be at least 10 characters.")
             return render_template("register.html")
 
         if User.query.filter_by(email=email).first():
             flash("An account with this email already exists. Please log in or reset your password.")
             return redirect(url_for("login"))
 
-        user = User(email=email, name=name, birthday=birthday, age=age, address=address)
+        is_first_user = User.query.count() == 0
+        user = User(email=email, name=name, birthday=birthday, age=age, address=address, is_admin=is_first_user)
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
 
-        code = str(random.randint(100000,999999))
-        session["verification_code"] = code
+        code = issue_verification_code(email, "verify")
         session["pending_email"] = email
 
         email_sent = send_verification_email(email, code)
         if not email_sent:
-            flash(f"Email not configured. Demo verification code: {code}.")
+            if os.environ.get("ALLOW_DEMO_CODES") == "1":
+                flash(f"Demo verification code: {code}.")
+            else:
+                flash("Verification email could not be sent. Configure mail and register again.")
+                VerificationCode.query.filter_by(email=email, purpose="verify").delete()
+                db.session.delete(user)
+                db.session.commit()
+                session.pop("pending_email", None)
+                return redirect(url_for("register"))
             return redirect(url_for("verify"))
 
         flash("Verification code sent to your email.")
@@ -257,16 +443,17 @@ def register():
 @app.route("/verify", methods=["GET","POST"])
 def verify():
     if request.method == "POST":
-        code = request.form["code"]
+        code = request.form.get("code", "")
         email = session.get("pending_email")
         user = User.query.filter_by(email=email).first() if email else None
-        if code == session.get("verification_code"):
+        if email and consume_verification_code(email, "verify", code):
             if user:
                 user.verified = True
                 db.session.commit()
+                session.pop("pending_email", None)
+                flash("Account verified! You can now login.")
             else:
                 flash("No pending user found for verification.")
-            flash("Account verified! You can now login.")
             return redirect(url_for("login"))
         else:
             flash("Invalid code.")
@@ -275,8 +462,8 @@ def verify():
 @app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
-        email = normalize_email(request.form["email"])
-        password = request.form["password"]
+        email = normalize_email(request.form.get("email", ""))
+        password = request.form.get("password", "")
         user = User.query.filter_by(email=email).first()
         if user and hasattr(user, "check_password") and user.check_password(password) and getattr(user, "verified", False):
             login_user(user)
@@ -290,38 +477,50 @@ def login():
 @app.route("/forgot", methods=["GET","POST"])
 def forgot():
     if request.method == "POST":
-        email = normalize_email(request.form["email"])
+        session.pop("reset_email", None)
+        email = normalize_email(request.form.get("email", ""))
         user = User.query.filter_by(email=email).first()
         if user:
-            code = str(random.randint(100000,999999))
-            session["reset_code"] = code
+            code = issue_verification_code(email, "reset")
             session["reset_email"] = email
             email_sent = send_reset_email(email, code)
             if not email_sent:
-                flash(f"Email not configured. Demo reset code: {code}.")
-                return redirect(url_for("reset"))
-            flash("Reset code sent to your email.")
-            return redirect(url_for("reset"))
+                if os.environ.get("ALLOW_DEMO_CODES") == "1":
+                    flash(f"Demo reset code: {code}.")
+                else:
+                    VerificationCode.query.filter_by(email=email, purpose="reset").delete()
+                    db.session.commit()
+                    session.pop("reset_email", None)
+                    flash("If the account exists, a reset code will be sent.")
+            else:
+                flash("If the account exists, a reset code will be sent.")
+        else:
+            flash("If the account exists, a reset code will be sent.")
+        return redirect(url_for("reset"))
     return render_template("forgot.html")
 
 @app.route("/reset", methods=["GET","POST"])
 def reset():
     if request.method == "POST":
-        code = request.form["code"]
-        new_password = request.form["password"]
-        if code == session.get("reset_code"):
-            email = session.get("reset_email")
+        code = request.form.get("code", "")
+        new_password = request.form.get("password", "")
+        if len(new_password) < 10 or new_password != request.form.get("confirm_password", ""):
+            flash("Use a matching password of at least 10 characters.")
+            return render_template("reset.html")
+        email = session.get("reset_email")
+        if email and consume_verification_code(email, "reset", code):
             user = User.query.filter_by(email=email).first() if email else None
             if user:
                 user.set_password(new_password)
                 db.session.commit()
+                session.pop("reset_email", None)
+                flash("Password reset successful.")
             else:
-                flash("No user found for password reset.")
-            flash("Password reset successful.")
+                flash("Password reset could not be completed.")
             return redirect(url_for("login"))
         else:
             flash("Invalid reset code.")
-    return render_template("forgot.html")
+    return render_template("reset.html")
 
 @app.route("/dashboard")
 @login_required
@@ -331,93 +530,142 @@ def dashboard():
     display_name = (current_user.name or current_user.email or "Admin").strip()
     if not display_name or display_name == "Admin":
         display_name = (current_user.email or "Admin").split("@", 1)[0].title()
+    session.setdefault('csrf_token', secrets.token_urlsafe(32))
+    states = [entry.requested_state for entry in ordered_appliance_configs()]
     return render_template(
         "dashboard.html",
         logs=logs,
-        appliance_names=APPLIANCE_NAMES,
-        appliance_states=APPLIANCE_STATES,
         appliance_configs=get_appliance_configs(),
+        appliance_states=states,
+        preset_limit=get_preset_limit(),
+        csrf_token=session['csrf_token'],
+        can_control=bool(current_user.is_admin),
         user_display_name=display_name,
     )
 
-@app.route("/set-preset", methods=["POST"])
-@login_required
-def set_preset():
-    global PRESET_LIMIT_WATTS
-    try:
-        PRESET_LIMIT_WATTS = float(request.form.get("preset_limit", PRESET_LIMIT_WATTS))
-    except ValueError:
-        flash("Invalid power preset. Please enter a number.")
-        return redirect(url_for("dashboard"))
-
-    flash(f"Power limit set to {PRESET_LIMIT_WATTS} W.")
-    return redirect(url_for("dashboard"))
-
 @app.route("/api/control", methods=["GET", "POST"])
 def api_control():
-    global APPLIANCE_STATES
-
     if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
+        if not current_user.is_authenticated or not current_user.is_admin or not csrf_valid():
+            return jsonify({"error": "authenticated session and CSRF token required"}), 403
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "payload must be an object"}), 400
         states = payload.get("appliances") or payload.get("appliance_states")
         normalized = normalize_appliance_states(states)
         if normalized is None:
             return jsonify({"error": "appliances must be a list of ON/OFF values"}), 400
 
-        APPLIANCE_STATES = normalized
-        for index, state in enumerate(APPLIANCE_STATES):
-            try:
-                control_appliance(index, state == "ON")
-            except Exception:
-                pass
+        entries = ordered_appliance_configs()
+        for entry, state in zip(entries, normalized):
+            entry.requested_state = state
+            if state == 'ON':
+                entry.is_tripped = False
+            entry.updated_at = utcnow_naive()
+        db.session.commit()
+        names = [entry.display_name for entry in entries]
 
         return jsonify({
-            "appliances": APPLIANCE_STATES,
-            "preset_limit": PRESET_LIMIT_WATTS,
-            "appliance_names": APPLIANCE_NAMES,
+            "appliances": normalized,
+            "tripped": [entry.is_tripped for entry in entries],
+            "preset_limit": get_preset_limit(),
+            "appliance_names": names,
             "status": "updated"
         })
 
+    if not current_user.is_authenticated and not device_token_valid():
+        return jsonify({'error': 'authentication required'}), 401
+    ensure_appliance_configs()
+    entries = ordered_appliance_configs()
+    states = [entry.requested_state for entry in entries]
     return jsonify({
-        "appliances": APPLIANCE_STATES,
-        "preset_limit": PRESET_LIMIT_WATTS,
-        "appliance_names": APPLIANCE_NAMES
+        "appliances": states,
+        "tripped": [entry.is_tripped for entry in entries],
+        "preset_limit": get_preset_limit(),
+        "appliance_names": [entry.display_name for entry in entries]
     })
+
+
+@app.route('/api/device-trip', methods=['POST'])
+def api_device_trip():
+    denied = require_device_token()
+    if denied:
+        return denied
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'payload must be an object'}), 400
+    try:
+        index = int(payload['index'])
+        value = float(payload['value_watts'])
+        limit = float(payload['limit_watts'])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': 'index and watt values are required'}), 400
+    entries = ordered_appliance_configs()
+    if index not in range(3) or not math.isfinite(value) or not math.isfinite(limit):
+        return jsonify({'error': 'invalid trip data'}), 400
+    entry = entries[index]
+    entry.requested_state = 'OFF'
+    entry.is_tripped = True
+    entry.updated_at = utcnow_naive()
+    reason = str(payload.get('reason', 'power_limit'))[:50]
+    message = f'{entry.display_name} cutoff: {reason}.'
+    db.session.add(PowerEvent(event_type=reason, value_watts=value,
+                              preset_limit=limit, message=message))
+    db.session.commit()
+    return jsonify({'status': 'tripped', 'appliances': [item.requested_state for item in entries]}), 200
 
 @app.route("/api/data", methods=["POST"])
 def api_data():
     """Accept a sensor batch from the Raspberry Pi and save usable readings."""
+    denied = require_device_token()
+    if denied:
+        return denied
     payload = request.get_json(silent=True)
     readings = payload.get("readings") if isinstance(payload, dict) else payload
-    if not isinstance(readings, list):
+    if not isinstance(readings, list) or len(readings) > 3:
         return jsonify({"error": "request body must be a list of sensor readings"}), 400
 
     accepted = []
+    seen_slaves = set()
     for reading in readings:
         if not isinstance(reading, dict):
             continue
 
         try:
-            voltage = float(reading["voltage"])
-            current = float(reading["current"])
             power = float(reading["power"])
+            slave_id = int(reading["slave_id"])
         except (KeyError, TypeError, ValueError):
             # PZEM errors and incomplete samples contain None values; skip them.
             continue
-
-        if not all(math.isfinite(value) for value in (voltage, current, power)):
+        if not math.isfinite(power) or power < 0 or not 1 <= slave_id <= 247 or slave_id in seen_slaves:
             continue
+
+        def optional_reading(name):
+            try:
+                value = float(reading[name])
+            except (KeyError, TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) and value >= 0 else None
+
+        voltage = optional_reading('voltage')
+        current = optional_reading('current')
+        energy = optional_reading('energy')
+        seen_slaves.add(slave_id)
 
         accepted.append(Log(
             voltage=voltage,
             current=current,
             power=power,
+            slave_id=slave_id,
+            energy=energy,
         ))
 
     if not accepted:
         return jsonify({"error": "no readings contained valid voltage, current, and power values", "accepted": 0}), 400
 
     try:
+        retention_cutoff = utcnow_naive() - datetime.timedelta(days=30)
+        Log.query.filter(Log.date_recorded < retention_cutoff).delete(synchronize_session=False)
         db.session.add_all(accepted)
         db.session.commit()
     except Exception:
@@ -427,71 +675,150 @@ def api_data():
 
     return jsonify({"status": "accepted", "accepted": len(accepted), "received": len(readings)}), 201
 
+
+@app.route('/api/latest', methods=['GET'])
+@login_required
+def api_latest():
+    latest = {}
+    rows = Log.query.filter(Log.slave_id.isnot(None)).order_by(Log.date_recorded.desc()).limit(100).all()
+    for row in rows:
+        latest.setdefault(row.slave_id, {
+            'slave_id': row.slave_id,
+            'voltage': row.voltage,
+            'current': row.current,
+            'power': row.power,
+            'energy': row.energy,
+            'date_recorded': row.date_recorded.isoformat() if row.date_recorded else None,
+        })
+    return jsonify({'readings': list(latest.values())})
+
+
+@app.route('/api/power-events', methods=['POST'])
+def ingest_power_event():
+    denied = require_device_token()
+    if denied:
+        return denied
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or not payload.get('event_type'):
+        return jsonify({'error': 'event_type is required'}), 400
+    try:
+        value = float(payload.get('value_watts', 0.0))
+        limit = float(payload.get('preset_limit', 0.0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'event watt values must be numeric'}), 400
+    if not math.isfinite(value) or not math.isfinite(limit):
+        return jsonify({'error': 'event watt values must be finite'}), 400
+    event = PowerEvent(
+        event_type=str(payload['event_type'])[:50],
+        value_watts=value,
+        preset_limit=limit,
+        message=str(payload.get('message', ''))[:255],
+    )
+    db.session.add(event)
+    db.session.commit()
+    return jsonify({'id': event.id, 'status': 'accepted'}), 201
+
 @app.route("/api/appliance-config", methods=["GET", "POST"])
 def api_appliance_config():
     if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
+        if not current_user.is_authenticated or not current_user.is_admin or not csrf_valid():
+            return jsonify({"error": "authenticated session and CSRF token required"}), 403
+        payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify({"error": "payload must be an object"}), 400
 
         for appliance_key, config in payload.items():
+            if appliance_key not in DEFAULT_APPLIANCE_CONFIGS:
+                return jsonify({"error": f"unknown appliance key: {appliance_key}"}), 400
             if not isinstance(config, dict):
                 continue
+            try:
+                limit = float(config.get("kw_limit", DEFAULT_APPLIANCE_CONFIGS[appliance_key]["kw_limit"]))
+            except (TypeError, ValueError):
+                return jsonify({"error": "kw_limit must be a number"}), 400
+            if not math.isfinite(limit) or limit <= 0:
+                return jsonify({"error": "kw_limit must be a positive finite number"}), 400
             entry = ApplianceConfig.query.filter_by(appliance_key=appliance_key).first()
             if entry is None:
                 entry = ApplianceConfig(
                     appliance_key=appliance_key,
                     display_name=str(config.get("display_name") or DEFAULT_APPLIANCE_CONFIGS.get(appliance_key, {}).get("display_name", appliance_key.title())),
-                    kw_limit=float(config.get("kw_limit", DEFAULT_APPLIANCE_CONFIGS.get(appliance_key, {}).get("kw_limit", 0.0))),
+                    kw_limit=limit,
                 )
                 db.session.add(entry)
             else:
                 if "display_name" in config:
                     entry.display_name = str(config["display_name"]) or entry.display_name
                 if "kw_limit" in config:
-                    entry.kw_limit = float(config["kw_limit"])
-                if "is_tripped" in config:
-                    entry.is_tripped = bool(config["is_tripped"])
-            entry.updated_at = datetime.datetime.utcnow()
+                    entry.kw_limit = limit
+            entry.updated_at = utcnow_naive()
         db.session.commit()
         return jsonify({"configs": get_appliance_configs(), "status": "updated"})
 
+    denied = require_device_token()
+    if denied:
+        return denied
     return jsonify({"configs": get_appliance_configs()})
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
-    global APPLIANCE_NAMES
-
     if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
+        denied = require_device_token()
+        if denied:
+            return denied
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "payload must be an object"}), 400
         names = payload.get("appliance_names")
         if not isinstance(names, list) or len(names) != 3:
             return jsonify({"error": "appliance_names must be a list of exactly 3 names"}), 400
 
         cleaned = []
         for item in names:
-            cleaned.append(str(item).strip() or f"Appliance {len(cleaned) + 1}")
+            cleaned.append((str(item).strip() or f"Appliance {len(cleaned) + 1}")[:100])
 
-        APPLIANCE_NAMES = cleaned
-        return jsonify({"appliance_names": APPLIANCE_NAMES, "status": "updated"})
+        entries = ordered_appliance_configs()
+        for entry, name in zip(entries, cleaned):
+            entry.display_name = name
+        db.session.commit()
+        return jsonify({"appliance_names": cleaned, "status": "updated"})
 
-    return jsonify({"appliance_names": APPLIANCE_NAMES})
+    denied = require_device_token()
+    if denied:
+        return denied
+    ensure_appliance_configs()
+    names = [entry.display_name for entry in ordered_appliance_configs()]
+    return jsonify({"appliance_names": names})
 
 @app.route("/api/preset", methods=["GET", "POST"])
 def api_preset():
-    global PRESET_LIMIT_WATTS
-
     if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
+        if not current_user.is_authenticated or not current_user.is_admin or not csrf_valid():
+            return jsonify({"error": "authenticated session and CSRF token required"}), 403
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "payload must be an object"}), 400
         try:
-            PRESET_LIMIT_WATTS = float(payload.get("preset_limit", PRESET_LIMIT_WATTS))
+            candidate = float(payload.get("preset_limit", get_preset_limit()))
         except (TypeError, ValueError):
             return jsonify({"error": "preset_limit must be a number"}), 400
-        return jsonify({"preset_limit": PRESET_LIMIT_WATTS, "status": "updated"})
+        if not math.isfinite(candidate) or candidate <= 0:
+            return jsonify({"error": "preset_limit must be positive and finite"}), 400
+        settings = db.session.get(SystemSettings, 1)
+        if settings is None:
+            settings = SystemSettings(id=1, preset_limit_watts=candidate)
+            db.session.add(settings)
+        else:
+            settings.preset_limit_watts = candidate
+        db.session.commit()
+        return jsonify({"preset_limit": candidate, "status": "updated"})
 
-    return jsonify({"preset_limit": PRESET_LIMIT_WATTS})
+    if not current_user.is_authenticated:
+        return jsonify({"error": "login required"}), 401
+    return jsonify({"preset_limit": get_preset_limit()})
 
 @app.route("/api/power-events", methods=["GET"])
+@login_required
 def api_power_events():
     events = PowerEvent.query.order_by(PowerEvent.created_at.desc()).limit(20).all()
     payload = [{
@@ -535,5 +862,7 @@ if __name__ == "__main__":
     with app.app_context():
         migrate_legacy_tables()
         db.create_all()
+        migrate_schema()
         ensure_appliance_configs()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+        get_preset_limit()
+    app.run(debug=os.environ.get('FLASK_DEBUG') == '1', host="0.0.0.0", port=5000)

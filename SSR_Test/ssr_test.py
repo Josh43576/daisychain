@@ -1,8 +1,11 @@
+import os
 import time
 import RPi.GPIO as GPIO
 
 
 def run_ssr_test():
+    if os.environ.get("ALLOW_SSR_TEST") != "1":
+        raise RuntimeError("Set ALLOW_SSR_TEST=1 only after disconnecting the appliance loads.")
     # BCM numbering for the GPIO pins.
     GPIO.setmode(GPIO.BCM)
 

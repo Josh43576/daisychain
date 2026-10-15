@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Manual (Face-to-Face) Interface for the Raspberry Pi Power Monitor System.
+Read-only manual monitor for the Raspberry Pi power system.
 
 Workflow:
 1. Scan RFID card to start
 2. Read electrical parameters from PZEM sensors via RS485
 3. Display readings on MPI3508 LCD
 4. Check if power consumption exceeds preset limit
-5. If limit exceeded, prompt admin to rescan RFID for confirmation and reset
+5. If limit exceeded, issue an alert and prompt for an admin acknowledgement
 6. Return to step 1
 
-This script runs independently from the Flask web app.
+This script is read-only: it does not operate relays or enforce a cutoff. Do not
+run it alongside main.py because both would access the same serial bus.
 """
 
 import time
-import sys
-from pzem_multi_reader import read_pzem_module, PZEM_IDS
+import math
+from sensors import read_all_pzem
 from auth.rfid import read_rfid_id, is_authorized, AUTHORIZED_IDS
 from display.lcd import initialize_lcd, show_readings
 
@@ -33,8 +34,12 @@ def get_total_power(readings):
     """Calculate total power consumption from all sensors."""
     total = 0.0
     for reading in readings:
-        if "power" in reading and reading["power"] is not None:
-            total += reading["power"]
+        try:
+            power = float(reading["power"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(power) and power >= 0:
+            total += power
     return total
 
 
@@ -51,13 +56,21 @@ def check_power_limit(total_power):
     return total_power > PRESET_LIMIT_WATTS
 
 
+def valid_power(reading):
+    try:
+        value = float(reading["power"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
 def prompt_admin_reset():
     """
     Prompt admin to scan their RFID card to confirm reset.
     Returns True if authorized admin scans, False otherwise.
     """
     print("\n" + "="*60)
-    print("POWER LIMIT EXCEEDED")
+    print("POWER LIMIT ALERT (monitor only; no relay cutoff is performed)")
     print(f"Total Power: {last_total_power:.1f}W > Limit: {PRESET_LIMIT_WATTS}W")
     print("="*60)
     print("\nAdmin: Scan your RFID card to confirm reset and continue.")
@@ -95,27 +108,14 @@ def wait_for_user_card():
 
 def read_and_display_sensors():
     """Read all PZEM sensors and display on LCD."""
-    readings = []
+    readings = read_all_pzem()
     print("\nReading sensors...")
-
-    for slave_id in PZEM_IDS:
-        try:
-            data = read_pzem_module(slave_id)
-            readings.append(data)
-            appliance_idx = PZEM_IDS.index(slave_id)
-            appliance_name = APPLIANCE_NAMES[appliance_idx] if appliance_idx < len(APPLIANCE_NAMES) else f"Appliance {appliance_idx + 1}"
-
-            if data.get("error"):
-                print(f"  {appliance_name} (ID {slave_id}): ERROR - {data['error']}")
-            else:
-                voltage = data.get("voltage", "?")
-                current = data.get("current", "?")
-                power = data.get("power", "?")
-                energy = data.get("energy", "?")
-                print(f"  {appliance_name} (ID {slave_id}): V={voltage}V, I={current}A, P={power}W, E={energy}Wh")
-        except Exception as e:
-            print(f"  Sensor {slave_id}: Exception - {e}")
-            readings.append({"error": str(e)})
+    for index, data in enumerate(readings):
+        name = APPLIANCE_NAMES[index] if index < len(APPLIANCE_NAMES) else f"Appliance {index + 1}"
+        if data.get("error"):
+            print(f"  {name} (ID {data.get('slave_id')}): ERROR - {data['error']}")
+        else:
+            print(f"  {name}: V={data['voltage']}V, I={data['current']}A, P={data['power']}W, E={data['energy']}Wh")
 
     # Display on LCD
     display_readings_on_lcd(readings)
@@ -151,6 +151,9 @@ def main():
             print(f"\n>>> Total Power Consumption: {total_power:.1f}W")
 
             # Step 3: Check power limit
+            sensor_fault = any(valid_power(reading) is None for reading in readings)
+            if sensor_fault:
+                print("Sensor fault: incomplete data; this monitor cannot confirm a safe load.")
             if check_power_limit(total_power):
                 print("⚠ ALERT: Power limit exceeded!")
                 power_limit_exceeded = True

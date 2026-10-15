@@ -1,34 +1,45 @@
+import os
+
 try:
     import RPi.GPIO as GPIO
+    HARDWARE_AVAILABLE = True
 except ModuleNotFoundError:
-    class _GPIO:
-        BOARD = "BOARD"
-        BCM = "BCM"
-        OUT = "OUT"
-        HIGH = 1
-        LOW = 0
+    HARDWARE_AVAILABLE = False
 
-        @staticmethod
-        def setwarnings(value):
-            pass
+class _GPIO:
+    BOARD = "BOARD"
+    BCM = "BCM"
+    OUT = "OUT"
+    HIGH = 1
+    LOW = 0
+    states = {}
 
-        @staticmethod
-        def setmode(mode):
-            pass
+    @staticmethod
+    def setwarnings(value):
+        pass
 
-        @staticmethod
-        def setup(pin, mode):
-            pass
+    @staticmethod
+    def setmode(mode):
+        pass
 
-        @staticmethod
-        def output(pin, value):
-            pass
+    @staticmethod
+    def setup(pin, mode):
+        pass
 
-        @staticmethod
-        def cleanup():
-            pass
+    @staticmethod
+    def output(pin, value):
+        _GPIO.states[pin] = value
 
+    @staticmethod
+    def cleanup(*pins):
+        pass
+
+
+if not HARDWARE_AVAILABLE or os.environ.get("SIMULATE_HARDWARE") == "1":
     GPIO = _GPIO()
+
+if os.environ.get("SIMULATE_HARDWARE") == "1":
+    HARDWARE_AVAILABLE = False
 
 # Raspberry Pi GPIO mapping for the SSR outputs.
 # Physical header pins: 11 = GPIO17, 13 = GPIO27, 15 = GPIO22
@@ -48,17 +59,26 @@ def init(pins=None):
         relay_pins = pins
 
     try:
+        if not HARDWARE_AVAILABLE and os.environ.get("SIMULATE_HARDWARE") != "1":
+            print("GPIO unavailable. Set SIMULATE_HARDWARE=1 only for an explicit simulation.")
+            _relays_initialized = False
+            return False
         setwarnings = getattr(GPIO, "setwarnings", None)
         if callable(setwarnings):
             setwarnings(False)
         GPIO.setmode(GPIO.BCM)
         for pin in relay_pins:
             GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.HIGH)
+            GPIO.output(pin, GPIO.LOW)
         _relays_initialized = True
         return True
     except Exception as e:
         print(f"Relay init failed: {e}")
+        for pin in relay_pins:
+            try:
+                GPIO.output(pin, GPIO.LOW)
+            except Exception:
+                pass
         _relays_initialized = False
         return False
 
@@ -69,18 +89,17 @@ __all__ = ["GPIO_RELAY_PINS", "PHYSICAL_RELAY_PINS", "relay_pins", "control_appl
 def control_appliance(index, state: bool):
     try:
         if not _relays_initialized:
-            init()
+            if not init():
+                return False
 
         if index < 0 or index >= len(relay_pins):
             print(f"Invalid appliance index: {index}")
             return False
 
         if state:
-            # Enable the SSR first, then power the appliance.
             GPIO.output(relay_pins[index], GPIO.HIGH)
             return True
 
-        # When turning off, shut down the appliance output first and then release the SSR.
         GPIO.output(relay_pins[index], GPIO.LOW)
         return True
     except Exception as e:
@@ -90,6 +109,13 @@ def control_appliance(index, state: bool):
 
 def cleanup():
     try:
+        for pin in relay_pins:
+            try:
+                GPIO.output(pin, GPIO.LOW)
+            except Exception:
+                pass
+        GPIO.cleanup(relay_pins)
+    except TypeError:
         GPIO.cleanup()
     finally:
         global _relays_initialized

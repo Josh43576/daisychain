@@ -3,428 +3,165 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Smart Home Energy Dashboard</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="energy-body">
-    <div class="energy-dashboard-shell">
-        <header class="system-header">
-            <div class="welcome-cluster">
-                <span class="eyebrow">Administrator</span>
-                <h1>Welcome back, {{ user_display_name }}</h1>
-            </div>
+<div class="energy-dashboard-shell">
+    <header class="system-header">
+        <div class="welcome-cluster"><span class="eyebrow">Power monitor</span><h1>Welcome, {{ user_display_name }}</h1></div>
+        <div class="header-actions">
+            <div class="status-pill is-baseline" id="modePill"><span class="pulse-dot"></span><div class="status-copy"><span class="status-label">DEVICE STATUS</span><strong id="modeText">Waiting for telemetry</strong></div></div>
+            <div class="utility-actions"><button class="header-action" data-view="settings" type="button">SETTINGS</button><button class="header-action" data-view="help" type="button">HELP</button><a class="logout-btn" href="{{ url_for('logout') }}">LOG OUT</a></div>
+        </div>
+    </header>
 
-            <div class="header-actions">
-                <div class="status-pill is-baseline" id="modePill">
-                    <span class="pulse-dot"></span>
-                    <div class="status-copy">
-                        <span class="status-label">SYSTEM STATE</span>
-                        <strong id="modeText">BASELINE RUN: LOGGING</strong>
+    <main class="view-shell live-view active" id="liveView">
+        <section class="channel-grid">
+            {% set channel_keys = ['acu', 'outlet', 'lighting'] %}
+            {% for index in range(3) %}
+                {% set key = channel_keys[index] %}
+                <article class="load-card" data-card="{{ index }}">
+                    <div class="card-topline"><div class="channel-meta"><span class="channel-id">CH {{ '%02d' % (index + 1) }}</span><h2>{{ appliance_configs[key].display_name }}</h2><small>Sensor slave {{ index + 1 }}</small></div>
+                        <label class="breaker-toggle" aria-label="Request appliance power"><input type="checkbox" data-channel="{{ index }}" {% if appliance_states[index] == 'ON' %}checked{% endif %} {% if not can_control %}disabled{% endif %}><span class="breaker-slider"></span></label>
                     </div>
-                </div>
-
-                <div class="utility-actions">
-                    <button class="header-action" data-view="settings" type="button">⚙ SETTINGS</button>
-                    <button class="header-action" data-view="help" type="button">? HELP</button>
-                    <a class="logout-btn" href="{{ url_for('logout') }}">LOG OUT</a>
-                </div>
-            </div>
-        </header>
-
-        <main class="view-shell live-view active" id="liveView">
-            <section class="channel-grid">
-                {% set channel_labels = ['ACU UNIT', '3-GANG OUTLET', 'LIGHTING CIRCUIT'] %}
-                {% set channel_sub = ['Air Conditioning System', 'Convenience Outlets', 'Household Light Bulb'] %}
-
-                {% for index in range(3) %}
-                    {% set label = channel_labels[index] %}
-                    {% set subtitle = channel_sub[index] %}
-                    {% set is_tripped = index == 0 %}
-                    <article class="load-card {% if is_tripped %}is-tripped{% endif %}" data-card="{{ index }}">
-                        <div class="card-topline">
-                            <div class="channel-meta">
-                                <span class="channel-id">CH {{ '%02d' % (index + 1) }}</span>
-                                <h2>{{ label }}</h2>
-                                <small>{{ subtitle }}</small>
-                            </div>
-
-                            <label class="breaker-toggle" aria-label="Remote run / shut-off toggle">
-                                <input type="checkbox" checked>
-                                <span class="breaker-slider"></span>
-                            </label>
-                        </div>
-
-                        <div class="wave-wrap">
-                            <svg class="power-wave" viewBox="0 0 600 120" preserveAspectRatio="none" aria-hidden="true">
-                                <defs>
-                                    <linearGradient id="waveGradient-{{ index }}" x1="0%" x2="100%" y1="0%" y2="0%">
-                                        <stop offset="0%" stop-color="#00f0ff" />
-                                        <stop offset="55%" stop-color="#00ff66" />
-                                        <stop offset="100%" stop-color="#ff8a00" />
-                                    </linearGradient>
-                                </defs>
-                                <path d="M0,60 C40,48 80,72 120,58 S200,42 240,60 S320,78 360,58 S440,40 480,60 S540,80 600,52" fill="none" stroke="url(#waveGradient-{{ index }})" stroke-width="3" stroke-linecap="round"></path>
-                                <path d="M0,86 C80,74 110,96 160,80 S260,65 300,82 S390,100 450,78 S530,60 600,74" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" stroke-linecap="round"></path>
-                            </svg>
-                        </div>
-
-                        <div class="metric-grid">
-                            <div class="metric-box">
-                                <span class="metric-icon">⚡</span>
-                                <div>
-                                    <label>Voltage</label>
-                                    <strong>-- V</strong>
-                                </div>
-                            </div>
-                            <div class="metric-box">
-                                <span class="metric-icon">∿</span>
-                                <div>
-                                    <label>Current</label>
-                                    <strong>-- A</strong>
-                                </div>
-                            </div>
-                            <div class="metric-box">
-                                <span class="metric-icon">▣</span>
-                                <div>
-                                    <label>kWh</label>
-                                    <strong>--</strong>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="gauge-panel">
-                            <div class="gauge-ring" data-progress="0">
-                                <div class="gauge-value">
-                                    <span>0.0 kWh</span>
-                                    <small>Awaiting live telemetry</small>
-                                </div>
-                            </div>
-                        </div>
-
-                        {% if is_tripped %}
-                        <div class="trip-warning active">
-                            <span class="warning-icon">⚠</span>
-                            <p>CRITICAL: DAILY CAP EXCEEDED - CIRCUIT ISOLATED</p>
-                        </div>
-
-                        <div class="rfid-overlay active">
-                            <div class="rfid-hud">
-                                <span class="rfid-state">RFID ACCESS</span>
-                                <strong id="rfidStatus-{{ index }}">SCAN 1: AUTHORIZED</strong>
-                                <div class="countdown-ring">
-                                    <span>5s</span>
-                                </div>
-                            </div>
-                        </div>
-                        {% endif %}
-                    </article>
-                {% endfor %}
-            </section>
-        </main>
-
-        <main class="view-shell analytics-view" id="analyticsView">
-            <section class="analytics-panel glass-panel">
-                <div class="analytics-header">
-                    <div>
-                        <p class="eyebrow">Historical Energy</p>
-                        <h3>Consumption Overview</h3>
+                    <div class="metric-grid">
+                        <div class="metric-box"><div><label>Voltage</label><strong class="metric-value" data-field="voltage">-- V</strong></div></div>
+                        <div class="metric-box"><div><label>Current</label><strong class="metric-value" data-field="current">-- A</strong></div></div>
+                        <div class="metric-box"><div><label>Energy</label><strong class="metric-value" data-field="energy">-- kWh</strong></div></div>
                     </div>
+                    <div class="gauge-panel"><div class="gauge-ring" data-progress="0"><div class="gauge-value"><span data-field="power">-- W</span><small data-field="timestamp">Awaiting telemetry</small></div></div></div>
+                    <p class="sensor-status" data-sensor="{{ index + 1 }}">Sensor status: unknown</p>
+                    <p class="trip-status" data-trip-status="{{ index }}" hidden>Power cutoff active. Turn the channel on again after checking the load.</p>
+                </article>
+            {% endfor %}
+        </section>
+    </main>
 
-                    <div class="segmented-control">
-                        <button class="segment active" type="button">DAY</button>
-                        <button class="segment" type="button">MONTH</button>
-                        <button class="segment" type="button">YEAR</button>
-                    </div>
-                </div>
+    <main class="view-shell analytics-view" id="analyticsView"><section class="analytics-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Live telemetry</p><h3>Latest measured power by channel</h3></div></div><div class="analytics-chart-wrap"><canvas id="analyticsChart" width="1100" height="420" aria-label="Latest power measurements"></canvas></div></section></main>
 
-                <div class="analytics-chart-wrap">
-                    <canvas id="analyticsChart" width="1100" height="420"></canvas>
-                </div>
-            </section>
-        </main>
+    <main class="view-shell settings-view" id="settingsView"><section class="settings-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Device settings</p><h3>Appliance limits</h3></div></div>
+        <div class="settings-grid"><article class="settings-card"><h4>Power limits</h4><div class="form-grid">
+            <label><span>Total system cap (W)</span><input type="number" data-total-limit value="{{ preset_limit }}" min="1" step="10" {% if not can_control %}disabled{% endif %}></label>
+            {% for key in channel_keys %}<label><span>{{ appliance_configs[key].display_name }}</span><input type="number" data-limit="{{ key }}" value="{{ appliance_configs[key].kw_limit }}" min="0.01" step="0.1" {% if not can_control %}disabled{% endif %}></label>{% endfor %}
+        </div><p>Changes are saved to the server and read by the Raspberry Pi.</p></article>
+        <article class="settings-card"><h4>Sensor diagnostics</h4><ul class="diag-list">{% for index in range(1, 4) %}<li><span>Modbus slave {{ index }}</span><strong data-sensor="{{ index }}">UNKNOWN</strong></li>{% endfor %}<li><span>Serial adapter</span><strong>/dev/ttyUSB0</strong></li></ul></article>
+        <article class="settings-card"><h4>Operating mode</h4><p>Monitoring-only mode is configured on the Raspberry Pi with BASELINE_MODE. Relay requests are enforced by the device agent.</p></article></div>
+    </section></main>
 
-        <main class="view-shell settings-view" id="settingsView">
-            <section class="settings-panel glass-panel">
-                <div class="analytics-header">
-                    <div>
-                        <p class="eyebrow">Admin Control</p>
-                        <h3>System Settings</h3>
-                    </div>
-                </div>
+    <main class="view-shell help-view" id="helpView"><section class="help-panel glass-panel"><div class="analytics-header"><div><p class="eyebrow">Support</p><h3>Operating notes</h3></div></div><ol class="manual-list"><li>Confirm the sensor diagnostics report current readings.</li><li>Set instantaneous limits in kW for each channel.</li><li>Use the channel switches to request power. The Pi rejects ON requests on sensor or configuration failure.</li><li>Verify relay polarity and wiring on a disconnected test load before connecting appliances.</li></ol></section></main>
+</div>
 
-                <div class="settings-grid">
-                    <article class="settings-card">
-                        <h4>Appliance Calibration</h4>
-                        <div class="form-grid">
-                            <label>
-                                <span>ACU Daily Cap</span>
-                                <input type="number" value="10.0" step="0.1">
-                            </label>
-                            <label>
-                                <span>Outlet Limit</span>
-                                <input type="number" value="5.0" step="0.1">
-                            </label>
-                            <label>
-                                <span>Lighting Limit</span>
-                                <input type="number" value="2.0" step="0.1">
-                            </label>
-                        </div>
-                    </article>
+<div class="fab-stack" aria-label="Primary navigation" role="navigation">
+    <button class="fab active" data-view="live" type="button">APPLIANCES</button><button class="fab" data-view="analytics" type="button">LIVE POWER</button><button class="fab" data-view="settings" type="button">SETTINGS</button><button class="fab" data-view="help" type="button">HELP</button>
+</div>
 
-                    <article class="settings-card">
-                        <h4>Bus Diagnostics</h4>
-                        <ul class="diag-list">
-                            <li><span>Modbus Slave 1</span><strong>ONLINE</strong></li>
-                            <li><span>Modbus Slave 2</span><strong>ONLINE</strong></li>
-                            <li><span>Modbus Slave 3</span><strong>STABLE</strong></li>
-                            <li><span>RS485 Adapter</span><strong>/dev/ttyUSB0</strong></li>
-                        </ul>
-                    </article>
+<script>
+const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+const views = {live: document.getElementById('liveView'), analytics: document.getElementById('analyticsView'), settings: document.getElementById('settingsView'), help: document.getElementById('helpView')};
+function setView(target) { Object.entries(views).forEach(([name, view]) => view.classList.toggle('active', name === target)); document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === target)); }
+document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { if (views[button.dataset.view]) setView(button.dataset.view); }));
 
-                    <article class="settings-card">
-                        <h4>RFID Credential Manager</h4>
-                        <table class="mini-table">
-                            <thead>
-                                <tr>
-                                    <th>Tag</th>
-                                    <th>Role</th>
-                                    <th>State</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr><td>F4A9-1B</td><td>Master Admin</td><td>Active</td></tr>
-                                <tr><td>92D1-80</td><td>Override</td><td>Active</td></tr>
-                                <tr><td>A4E2-6C</td><td>Guest</td><td>Locked</td></tr>
-                            </tbody>
-                        </table>
-                    </article>
-
-                    <article class="settings-card">
-                        <h4>System Mode</h4>
-                        <div class="toggle-stack">
-                            <label class="mode-toggle large" aria-label="Switch system mode">
-                                <input id="modeToggle" type="checkbox">
-                                <span class="toggle-slider"></span>
-                                <span class="toggle-text">ACTIVE CONTROL MODE</span>
-                            </label>
-                            <p>7-Day Baseline logging is active until the admin shifts into enforced power cutoff logic.</p>
-                        </div>
-                    </article>
-                </div>
-            </section>
-        </main>
-
-        <main class="view-shell help-view" id="helpView">
-            <section class="help-panel glass-panel">
-                <div class="analytics-header">
-                    <div>
-                        <p class="eyebrow">Support</p>
-                        <h3>Help / Inquiry / User Manual</h3>
-                    </div>
-                </div>
-
-                <div class="help-grid">
-                    <article class="help-card">
-                        <h4>Quick-Start Manual</h4>
-                        <ol class="manual-list">
-                            <li>Review the live appliance states and confirm all channels are running in safe operating mode.</li>
-                            <li>Set daily consumption thresholds to match your target savings plan.</li>
-                            <li>Use the RFID reset sequence to restore power after an automatic isolation event.</li>
-                            <li>Monitor the historical view for appliance-specific cost spikes.</li>
-                        </ol>
-                    </article>
-
-                    <article class="help-card">
-                        <h4>Trip Recovery Guide</h4>
-                        <div class="step-stack">
-                            <div class="step-pill">1. Unplug heavy loads</div>
-                            <div class="step-pill">2. Tap the registered RFID card twice within 5 seconds</div>
-                            <div class="step-pill">3. Restore the offending circuit and recheck the daily cap</div>
-                        </div>
-                    </article>
-
-                    <article class="help-card wide">
-                        <h4>Submit Technical Inquiry</h4>
-                        <form class="inquiry-form">
-                            <div class="form-grid">
-                                <label>
-                                    <span>Issue Type</span>
-                                    <select>
-                                        <option>Hardware anomaly</option>
-                                        <option>RFID bypass failure</option>
-                                        <option>Serial link fault</option>
-                                        <option>Manual override issue</option>
-                                    </select>
-                                </label>
-                                <label>
-                                    <span>Device</span>
-                                    <input type="text" value="ACU UNIT">
-                                </label>
-                            </div>
-                            <label>
-                                <span>Description</span>
-                                <textarea rows="5">System logs indicate unstable serial communication during a repeated relay toggle cycle.</textarea>
-                            </label>
-                            <button type="button" class="submit-btn">Send to Local Log</button>
-                        </form>
-                    </article>
-                </div>
-            </section>
-        </main>
-    </div>
-
-    <div class="fab-stack" aria-label="Primary navigation" role="navigation">
-        <button class="fab active" data-view="live" type="button">
-            <span class="fab-icon">▦</span>
-            <span>APPLIANCES</span>
-        </button>
-        <button class="fab" data-view="analytics" type="button">
-            <span class="fab-icon">↗</span>
-            <span>ANALYTICS</span>
-        </button>
-        <button class="fab" data-view="settings" type="button">
-            <span class="fab-icon">⚙</span>
-            <span>SETTINGS</span>
-        </button>
-        <button class="fab" data-view="help" type="button">
-            <span class="fab-icon">?</span>
-            <span>HELP</span>
-        </button>
-    </div>
-
-    <script>
-        const modeToggle = document.getElementById('modeToggle');
-        const modePill = document.getElementById('modePill');
-        const modeText = document.getElementById('modeText');
-        const views = {
-            live: document.getElementById('liveView'),
-            analytics: document.getElementById('analyticsView'),
-            settings: document.getElementById('settingsView'),
-            help: document.getElementById('helpView')
-        };
-        const viewButtons = document.querySelectorAll('[data-view]');
-
-        function setView(target) {
-            Object.entries(views).forEach(([name, view]) => {
-                view.classList.toggle('active', name === target);
+async function updateTelemetry() {
+    try {
+        const response = await fetch('/api/latest', {cache: 'no-store'});
+        if (!response.ok) throw new Error('Telemetry request failed');
+        const payload = await response.json();
+        const readings = payload.readings || [];
+        document.getElementById('modeText').textContent = readings.length ? 'Telemetry connected' : 'No sensor readings received';
+        const powers = [0, 0, 0];
+        const sensorStates = [0, 0, 0];
+        for (const reading of readings) {
+            const index = Number(reading.slave_id) - 1;
+            if (!Number.isInteger(index) || index < 0 || index > 2) continue;
+            const card = document.querySelector(`[data-card="${index}"]`);
+            if (!card) continue;
+            const ageMs = reading.date_recorded ? Date.now() - new Date(reading.date_recorded + 'Z').getTime() : Infinity;
+            sensorStates[index] = ageMs <= 15000 ? 1 : 2;
+            powers[index] = Number(reading.power) || 0;
+            const display = (value, digits, suffix, scale = 1) => Number.isFinite(Number(value)) && value !== null ? `${(Number(value) / scale).toFixed(digits)} ${suffix}` : `-- ${suffix}`;
+            card.querySelector('[data-field="voltage"]').textContent = display(reading.voltage, 1, 'V');
+            card.querySelector('[data-field="current"]').textContent = display(reading.current, 3, 'A');
+            card.querySelector('[data-field="energy"]').textContent = display(reading.energy, 3, 'kWh', 1000);
+            card.querySelector('[data-field="power"]').textContent = `${powers[index].toFixed(1)} W`;
+            card.querySelector('[data-field="timestamp"]').textContent = reading.date_recorded ? new Date(reading.date_recorded + 'Z').toLocaleTimeString() : 'Timestamp unavailable';
+        }
+        for (let slave = 1; slave <= 3; slave++) {
+            const status = sensorStates[slave - 1] === 1 ? 'ONLINE' : sensorStates[slave - 1] === 2 ? 'STALE' : 'NO DATA';
+            document.querySelectorAll(`[data-sensor="${slave}"]`).forEach(node => node.textContent = status);
+        }
+        const stateResponse = await fetch('/api/control', {cache: 'no-store'});
+        if (stateResponse.ok) {
+            const stateData = await stateResponse.json();
+            document.querySelectorAll('.breaker-toggle input').forEach((toggle, index) => {
+                if (!toggle.matches(':active') && document.activeElement !== toggle) toggle.checked = stateData.appliances[index] === 'ON';
             });
-
-            viewButtons.forEach((button) => {
-                const isActive = button.dataset.view === target;
-                button.classList.toggle('active', isActive);
+            (stateData.tripped || []).forEach((tripped, index) => {
+                const card = document.querySelector(`[data-card="${index}"]`);
+                const status = document.querySelector(`[data-trip-status="${index}"]`);
+                if (card) card.classList.toggle('is-tripped', Boolean(tripped));
+                if (status) status.hidden = !tripped;
             });
         }
+        drawPower(powers);
+    } catch (error) {
+        document.getElementById('modeText').textContent = 'Telemetry unavailable';
+        document.querySelectorAll('[data-sensor]').forEach(node => node.textContent = 'NO DATA');
+    }
+}
 
-        if (modeToggle) {
-            modeToggle.addEventListener('change', () => {
-                const active = modeToggle.checked;
-                modePill.classList.toggle('is-control', active);
-                modePill.classList.toggle('is-baseline', !active);
-                modeText.textContent = active
-                    ? 'ACTIVE CONTROL MODE: TRIP LOGIC ENABLED'
-                    : 'BASELINE RUN: LOGGING';
-            });
-        }
+async function postJson(url, body) {
+    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken}, body: JSON.stringify(body)});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Request failed');
+    return result;
+}
 
-        document.querySelectorAll('.breaker-toggle input').forEach((toggle) => {
-            toggle.addEventListener('change', (event) => {
-                const card = event.target.closest('.load-card');
-                if (!card) return;
-                card.classList.toggle('is-offline', !event.target.checked);
-            });
-        });
+document.querySelectorAll('.breaker-toggle input').forEach(input => input.addEventListener('change', async () => {
+    const requested = [...document.querySelectorAll('.breaker-toggle input')].map(toggle => toggle.checked ? 'ON' : 'OFF');
+    input.disabled = true;
+    try { await postJson('/api/control', {appliances: requested}); }
+    catch (error) { input.checked = !input.checked; alert(error.message); }
+    finally { input.disabled = false; }
+}));
 
-        document.querySelectorAll('.gauge-ring').forEach((ring) => {
-            const progress = Number(ring.dataset.progress || 0);
-            const rotation = Math.min(Math.max(progress, 0), 100);
-            ring.style.setProperty('--progress', rotation);
-            ring.style.background = 'conic-gradient(from 180deg, rgba(0,240,255,0.9) 0deg, rgba(0,255,102,0.9) ' + (rotation * 2.7) + 'deg, rgba(255,255,255,0.08) 0deg)';
-        });
+document.querySelectorAll('[data-limit]').forEach(input => input.addEventListener('change', async () => {
+    const key = input.dataset.limit;
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || value <= 0) { alert('Limit must be a positive number.'); return; }
+    input.disabled = true;
+    try { await postJson('/api/appliance-config', {[key]: {kw_limit: value}}); }
+    catch (error) { alert(error.message); }
+    finally { input.disabled = false; }
+}));
 
-        viewButtons.forEach((button) => {
-            button.addEventListener('click', () => {
-                const target = button.dataset.view;
-                if (!target || !views[target]) return;
-                setView(target);
-            });
-        });
+document.querySelector('[data-total-limit]').addEventListener('change', async event => {
+    const input = event.currentTarget, value = Number(input.value);
+    if (!Number.isFinite(value) || value <= 0) { alert('System limit must be a positive number.'); return; }
+    input.disabled = true;
+    try { await postJson('/api/preset', {preset_limit: value}); }
+    catch (error) { alert(error.message); }
+    finally { input.disabled = false; }
+});
 
-        const canvas = document.getElementById('analyticsChart');
-        if (canvas) {
-            const ctx = canvas.getContext('2d');
+function drawPower(values) {
+    const canvas = document.getElementById('analyticsChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height, max = Math.max(100, ...values);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(10,14,19,0.72)'; ctx.fillRect(0, 0, w, h);
+    values.forEach((value, index) => {
+        const x = 100 + index * 320, barHeight = (value / max) * (h - 100);
+        ctx.fillStyle = '#00f0ff'; ctx.fillRect(x, h - 60 - barHeight, 160, barHeight);
+        ctx.fillStyle = '#dfeaff'; ctx.font = '16px sans-serif';
+        ctx.fillText(`CH ${index + 1}: ${value.toFixed(1)} W`, x, h - 25);
+    });
+}
 
-            function drawAnalyticsChart() {
-                const w = canvas.width;
-                const h = canvas.height;
-                ctx.clearRect(0, 0, w, h);
-
-                ctx.fillStyle = 'rgba(10, 14, 19, 0.72)';
-                ctx.fillRect(0, 0, w, h);
-
-                const values = [18, 24, 20, 32, 28, 38, 34, 42, 54, 58, 62, 68];
-                const maxValue = 80;
-                const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-                ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-                ctx.lineWidth = 1;
-                for (let i = 0; i <= 5; i++) {
-                    const y = 40 + (i * ((h - 80) / 5));
-                    ctx.beginPath();
-                    ctx.moveTo(70, y);
-                    ctx.lineTo(w - 30, y);
-                    ctx.stroke();
-                }
-
-                const gradient = ctx.createLinearGradient(0, 0, 0, h);
-                gradient.addColorStop(0, 'rgba(0, 240, 255, 0.52)');
-                gradient.addColorStop(1, 'rgba(0, 240, 255, 0.06)');
-
-                ctx.beginPath();
-                ctx.moveTo(70, h - 50);
-                values.forEach((value, index) => {
-                    const x = 70 + (index * ((w - 120) / (values.length - 1)));
-                    const y = h - 50 - (value / maxValue) * (h - 110);
-                    ctx.lineTo(x, y);
-                });
-                ctx.lineTo(w - 30, h - 50);
-                ctx.lineTo(70, h - 50);
-                ctx.closePath();
-                ctx.fillStyle = gradient;
-                ctx.fill();
-
-                ctx.beginPath();
-                values.forEach((value, index) => {
-                    const x = 70 + (index * ((w - 120) / (values.length - 1)));
-                    const y = h - 50 - (value / maxValue) * (h - 110);
-                    if (index === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                });
-                ctx.strokeStyle = '#00f0ff';
-                ctx.lineWidth = 3;
-                ctx.stroke();
-
-                values.forEach((value, index) => {
-                    const x = 70 + (index * ((w - 120) / (values.length - 1)));
-                    const y = h - 50 - (value / maxValue) * (h - 110);
-                    ctx.beginPath();
-                    ctx.arc(x, y, 4, 0, Math.PI * 2);
-                    ctx.fillStyle = '#00ff66';
-                    ctx.fill();
-                });
-
-                ctx.fillStyle = 'rgba(223,234,255,0.75)';
-                ctx.font = '12px Inter';
-                labels.forEach((label, index) => {
-                    const x = 70 + (index * ((w - 120) / (labels.length - 1)));
-                    ctx.fillText(label, x - 10, h - 16);
-                });
-            }
-
-            drawAnalyticsChart();
-        }
-    </script>
+updateTelemetry();
+window.setInterval(updateTelemetry, 5000);
+</script>
 </body>
 </html>
