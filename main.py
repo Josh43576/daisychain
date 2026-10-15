@@ -8,6 +8,7 @@ import signal
 import sys
 import os
 import json
+import sqlite3
 from contextlib import suppress
 from datetime import datetime, timezone
 
@@ -187,13 +188,55 @@ def handle_admin_bypass(preset_limit):
         return True
 
 
+def convert_watts_to_kw(raw_watts):
+    """Convert raw PZEM power readings from Watts to kW before evaluating limit thresholds."""
+    try:
+        return float(raw_watts or 0.0) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def convert_wh_to_kwh(raw_wh):
+    """Normalize energy readings to kWh so they match the admin-configured limits."""
+    try:
+        return float(raw_wh or 0.0) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def load_appliance_limits_from_db():
+    """Read the latest appliance kW limits from the Flask SQLite database on every poll."""
+    defaults = {"acu": 10.0, "outlet": 5.0, "lighting": 2.0}
+    db_path = os.path.join(os.path.dirname(__file__), "users.db")
+    if not os.path.exists(db_path):
+        return defaults
+
+    conn = sqlite3.connect(db_path)
+    try:
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='appliance_configs'").fetchone()
+        if tables is None:
+            return defaults
+
+        rows = conn.execute("SELECT appliance_key, kw_limit FROM appliance_configs").fetchall()
+        for appliance_key, kw_limit in rows:
+            try:
+                defaults[str(appliance_key)] = float(kw_limit)
+            except (TypeError, ValueError):
+                continue
+        return defaults
+    except Exception:
+        return defaults
+    finally:
+        conn.close()
+
+
 def update_daily_energy(readings):
     """Update the active daily total while leaving historical logs in place."""
     global daily_energy_kwh
     total = 0.0
     for reading in readings:
         with suppress(TypeError, ValueError):
-            total += float(reading.get("energy", 0.0))
+            total += convert_wh_to_kwh(float(reading.get("energy", 0.0)))
     daily_energy_kwh = total
     save_daily_state()
     return total
@@ -225,6 +268,7 @@ def main():
             # 2. Update daily total before checking trip condition
             current_daily_energy = update_daily_energy(readings)
             print(f"Current daily energy: {current_daily_energy} kWh")
+            appliance_limits.update(load_appliance_limits_from_db())
 
             if BASELINE_MODE:
                 print("BASELINE_MODE active: keeping all relay lines HIGH for the 7-day data collection window.")
@@ -258,28 +302,28 @@ def main():
                 appliance_names = flask_names  # Update if Flask has new names
 
             # 7. Check each device against its independent limit threshold.
+            appliance_limits = load_appliance_limits_from_db()
             for device_name, limit_kwh in appliance_limits.items():
                 index = appliance_index.get(device_name, 0)
                 if index >= len(readings):
                     continue
                 reading = readings[index]
                 try:
-                    energy_kwh = float(reading.get("energy", 0.0))
+                    power_watts = float(reading.get("power", 0.0) or 0.0)
                 except (TypeError, ValueError):
-                    energy_kwh = 0.0
-                if energy_kwh > 1000.0:
-                    energy_kwh = energy_kwh / 1000.0
+                    power_watts = 0.0
 
-                if energy_kwh >= limit_kwh:
+                current_kw = convert_watts_to_kw(power_watts)
+                if current_kw >= float(limit_kwh):
                     print(
-                        f"{device_name.upper()} limit breached: {energy_kwh:.2f}kWh >= {limit_kwh:.2f}kWh. Cutting power on pin {appliance_pins.get(device_name, 17)}."
+                        f"{device_name.upper()} limit breached: {current_kw:.2f}kW >= {float(limit_kwh):.2f}kW. Cutting power on pin {appliance_pins.get(device_name, 17)}."
                     )
                     if GPIO is not None:
                         GPIO.output(appliance_pins.get(device_name, 17), GPIO.LOW)
                     control_appliance(index, False)
                     if index < len(appliances):
                         appliances[index] = "OFF"
-                    append_history("preset_cutoff", f"{device_name.upper()} preset limit exceeded. Relay cut power.", value_watts=float(reading.get("power", 0.0)), preset_limit=limit_kwh)
+                    append_history("preset_cutoff", f"{device_name.upper()} preset limit exceeded. Relay cut power.", value_watts=power_watts, preset_limit=float(limit_kwh))
 
             # 8. Apply relay control from web commands
             for i, cmd in enumerate(appliances):

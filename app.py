@@ -2,14 +2,19 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, or_
 from controls.relay import control_appliance
-import os, random, smtplib, datetime
+import os, random, smtplib, datetime, math
 
 app = Flask(__name__)
 DEFAULT_PRESET_LIMIT = 500.0
 PRESET_LIMIT_WATTS = DEFAULT_PRESET_LIMIT
 DEFAULT_APPLIANCE_NAMES = ["Appliance 1", "Appliance 2", "Appliance 3"]
+DEFAULT_APPLIANCE_CONFIGS = {
+    "acu": {"display_name": "ACU Unit", "kw_limit": 10.0},
+    "outlet": {"display_name": "3-Gang Outlet", "kw_limit": 5.0},
+    "lighting": {"display_name": "Lighting Circuit", "kw_limit": 2.0},
+}
 APPLIANCE_NAMES = DEFAULT_APPLIANCE_NAMES.copy()
 APPLIANCE_STATES = ["OFF", "OFF", "OFF"]
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
@@ -66,6 +71,17 @@ class Log(db.Model):
     user = db.relationship("User", backref=db.backref("logs", lazy=True))
 
 
+class ApplianceConfig(db.Model):
+    __tablename__ = "appliance_configs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    appliance_key = db.Column(db.String(50), unique=True, nullable=False)
+    display_name = db.Column(db.String(100), nullable=False)
+    kw_limit = db.Column(db.Float, default=10.0, nullable=False)
+    is_tripped = db.Column(db.Boolean, default=False)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+
 class PowerEvent(db.Model):
     __tablename__ = "power_events"
 
@@ -83,6 +99,56 @@ def load_user(user_id):
 
 def normalize_email(email):
     return email.strip().lower()
+
+
+def convert_watts_to_kw(raw_watts):
+    try:
+        return float(raw_watts or 0.0) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def convert_wh_to_kwh(raw_wh):
+    try:
+        return float(raw_wh or 0.0) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def ensure_appliance_configs():
+    for appliance_key, config in DEFAULT_APPLIANCE_CONFIGS.items():
+        existing = ApplianceConfig.query.filter_by(appliance_key=appliance_key).first()
+        if existing is None:
+            db.session.add(ApplianceConfig(
+                appliance_key=appliance_key,
+                display_name=config["display_name"],
+                kw_limit=float(config["kw_limit"]),
+                is_tripped=False,
+            ))
+        else:
+            existing.display_name = config["display_name"] if not existing.display_name else existing.display_name
+            existing.kw_limit = float(config["kw_limit"]) if existing.kw_limit is None else existing.kw_limit
+            existing.updated_at = datetime.datetime.utcnow()
+    db.session.commit()
+
+
+def get_appliance_configs():
+    ensure_appliance_configs()
+    entries = ApplianceConfig.query.order_by(ApplianceConfig.id).all()
+    payload = {}
+    for entry in entries:
+        payload[entry.appliance_key] = {
+            "display_name": entry.display_name,
+            "kw_limit": float(entry.kw_limit or 0.0),
+            "is_tripped": bool(entry.is_tripped),
+        }
+    for key, defaults in DEFAULT_APPLIANCE_CONFIGS.items():
+        payload.setdefault(key, {
+            "display_name": defaults["display_name"],
+            "kw_limit": float(defaults["kw_limit"]),
+            "is_tripped": False,
+        })
+    return payload
 
 
 def normalize_appliance_states(states):
@@ -260,7 +326,8 @@ def reset():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    logs = Log.query.filter_by(user_id=current_user.id).all()
+    logs = Log.query.filter(or_(Log.user_id == current_user.id, Log.user_id.is_(None))) \
+        .order_by(Log.date_recorded.desc()).all()
     display_name = (current_user.name or current_user.email or "Admin").strip()
     if not display_name or display_name == "Admin":
         display_name = (current_user.email or "Admin").split("@", 1)[0].title()
@@ -269,6 +336,7 @@ def dashboard():
         logs=logs,
         appliance_names=APPLIANCE_NAMES,
         appliance_states=APPLIANCE_STATES,
+        appliance_configs=get_appliance_configs(),
         user_display_name=display_name,
     )
 
@@ -315,6 +383,80 @@ def api_control():
         "preset_limit": PRESET_LIMIT_WATTS,
         "appliance_names": APPLIANCE_NAMES
     })
+
+@app.route("/api/data", methods=["POST"])
+def api_data():
+    """Accept a sensor batch from the Raspberry Pi and save usable readings."""
+    payload = request.get_json(silent=True)
+    readings = payload.get("readings") if isinstance(payload, dict) else payload
+    if not isinstance(readings, list):
+        return jsonify({"error": "request body must be a list of sensor readings"}), 400
+
+    accepted = []
+    for reading in readings:
+        if not isinstance(reading, dict):
+            continue
+
+        try:
+            voltage = float(reading["voltage"])
+            current = float(reading["current"])
+            power = float(reading["power"])
+        except (KeyError, TypeError, ValueError):
+            # PZEM errors and incomplete samples contain None values; skip them.
+            continue
+
+        if not all(math.isfinite(value) for value in (voltage, current, power)):
+            continue
+
+        accepted.append(Log(
+            voltage=voltage,
+            current=current,
+            power=power,
+        ))
+
+    if not accepted:
+        return jsonify({"error": "no readings contained valid voltage, current, and power values", "accepted": 0}), 400
+
+    try:
+        db.session.add_all(accepted)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Failed to save incoming sensor readings")
+        return jsonify({"error": "failed to save sensor readings"}), 500
+
+    return jsonify({"status": "accepted", "accepted": len(accepted), "received": len(readings)}), 201
+
+@app.route("/api/appliance-config", methods=["GET", "POST"])
+def api_appliance_config():
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "payload must be an object"}), 400
+
+        for appliance_key, config in payload.items():
+            if not isinstance(config, dict):
+                continue
+            entry = ApplianceConfig.query.filter_by(appliance_key=appliance_key).first()
+            if entry is None:
+                entry = ApplianceConfig(
+                    appliance_key=appliance_key,
+                    display_name=str(config.get("display_name") or DEFAULT_APPLIANCE_CONFIGS.get(appliance_key, {}).get("display_name", appliance_key.title())),
+                    kw_limit=float(config.get("kw_limit", DEFAULT_APPLIANCE_CONFIGS.get(appliance_key, {}).get("kw_limit", 0.0))),
+                )
+                db.session.add(entry)
+            else:
+                if "display_name" in config:
+                    entry.display_name = str(config["display_name"]) or entry.display_name
+                if "kw_limit" in config:
+                    entry.kw_limit = float(config["kw_limit"])
+                if "is_tripped" in config:
+                    entry.is_tripped = bool(config["is_tripped"])
+            entry.updated_at = datetime.datetime.utcnow()
+        db.session.commit()
+        return jsonify({"configs": get_appliance_configs(), "status": "updated"})
+
+    return jsonify({"configs": get_appliance_configs()})
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
@@ -393,4 +535,5 @@ if __name__ == "__main__":
     with app.app_context():
         migrate_legacy_tables()
         db.create_all()
+        ensure_appliance_configs()
     app.run(debug=True, host="0.0.0.0", port=5000)
