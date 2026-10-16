@@ -11,6 +11,8 @@ This project reads three PZEM power meters, uploads measurements to a Flask dash
 5. On the Pi, confirm relay polarity and wiring with disconnected loads, then run `python main.py`. Set `BASELINE_MODE=1` for telemetry-only operation; this mode holds all relay outputs OFF.
 6. Register the first account and verify its email. The first account on a fresh database is the administrator. Existing users are migrated as administrators to preserve access; review accounts after upgrading.
 
+For website testing without an SMTP account, initialize the database and run `flask --app app create-test-admin`. The command prompts for an email and password, then creates or resets a verified administrator account. Use the prompted credentials on `/login`. Browser registration also displays a demo verification code when mail is unconfigured and the request comes directly from loopback (`127.0.0.1` or `::1`). You can enable demo codes explicitly with `ALLOW_DEMO_CODES=1`; set it to `0` in deployment.
+
 For a software-only simulation, set `SIMULATE_HARDWARE=1` **before starting the Python process**. The PZEM reader and relay GPIO use explicit mocks in this mode; simulated telemetry does not validate electrical behavior.
 
 ## Environment variables

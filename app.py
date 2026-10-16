@@ -1,6 +1,8 @@
 import hmac
 import math
 import os, secrets, smtplib, datetime
+from getpass import getpass
+import click
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -312,6 +314,31 @@ def init_db_command():
     print('Database initialized.')
 
 
+@app.cli.command('create-test-admin')
+def create_test_admin_command():
+    """Create or reset a verified administrator for local website testing."""
+    with app.app_context():
+        migrate_legacy_tables()
+        db.create_all()
+        migrate_schema()
+        email = normalize_email(input('Admin email: '))
+        if not email or '@' not in email:
+            raise click.ClickException('Enter a valid email address.')
+        password = getpass('Password (at least 10 characters): ')
+        if len(password) < 10:
+            raise click.ClickException('Password must be at least 10 characters.')
+
+        user = User.query.filter_by(email=email).first()
+        if user is None:
+            user = User(email=email, is_admin=True)
+            db.session.add(user)
+        user.set_password(password)
+        user.verified = True
+        user.is_admin = True
+        db.session.commit()
+        print(f'Verified test administrator ready: {email}')
+
+
 def migrate_legacy_tables():
     with app.app_context():
         tables = inspect(db.engine).get_table_names()
@@ -383,6 +410,17 @@ def consume_verification_code(email, purpose, code):
     db.session.commit()
     return valid
 
+
+def demo_codes_enabled():
+    """Allow demo codes explicitly, or for a no-mail loopback development session."""
+    configured = os.environ.get("ALLOW_DEMO_CODES")
+    if configured is not None:
+        return configured.strip() == "1"
+    if app.testing:
+        return True
+    mail_is_configured = bool(os.environ.get("MAIL_USERNAME") and os.environ.get("MAIL_PASSWORD"))
+    return not mail_is_configured and request.remote_addr in {"127.0.0.1", "::1"}
+
 # ------------------ ROUTES ------------------
 @app.route("/")
 def home():
@@ -425,7 +463,7 @@ def register():
 
         email_sent = send_verification_email(email, code)
         if not email_sent:
-            if os.environ.get("ALLOW_DEMO_CODES") == "1":
+            if demo_codes_enabled():
                 flash(f"Demo verification code: {code}.")
             else:
                 flash("Verification email could not be sent. Configure mail and register again.")
@@ -469,7 +507,7 @@ def login():
             login_user(user)
             return redirect(url_for("dashboard"))
         elif user and not user.verified:
-            flash("Account not verified yet. Check your email or use the demo code shown during registration.")
+            flash("Account not verified. Check your email, or enable ALLOW_DEMO_CODES=1 for local registration testing.")
         else:
             flash("Invalid credentials or account not verified.")
     return render_template("login.html")
@@ -485,7 +523,7 @@ def forgot():
             session["reset_email"] = email
             email_sent = send_reset_email(email, code)
             if not email_sent:
-                if os.environ.get("ALLOW_DEMO_CODES") == "1":
+                if demo_codes_enabled():
                     flash(f"Demo reset code: {code}.")
                 else:
                     VerificationCode.query.filter_by(email=email, purpose="reset").delete()

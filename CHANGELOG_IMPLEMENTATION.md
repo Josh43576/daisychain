@@ -16,6 +16,8 @@ The app and Pi agent now use a single command path: an administrator submits a r
 - Added `api_latest` to return the newest reading for each PZEM sensor. Added persisted trip events when the Pi reports a sensor fault or power cutoff.
 - Validated finite positive power limits, device IDs, payload types, duplicate channels, and trip values.
 - Verification and reset codes are stored as password hashes, expire after 10 minutes, and allow at most five attempts. Passwords require 10 characters; reset now has a working form with confirmation.
+- Added `flask --app app create-test-admin` so local website testing can create a verified login without SMTP; browser registration still uses email verification or explicit local demo-code mode.
+- Fixed the local signup/login test path: no-mail requests directly from loopback now show the verification code, registration flashes are visible, and explicit `ALLOW_DEMO_CODES=0` continues to disable the fallback.
 - First registration on a new database becomes administrator. Existing accounts are migrated as administrators to preserve access; audit them after updating.
 - The app no longer starts Flask debug mode by default. It uses a random development secret if no stable secret is configured; deployment must set `FLASK_SECRET_KEY` to preserve sessions across restarts.
 
@@ -54,6 +56,6 @@ For this workspace, the existing SQLite file was backed up to `instance/users.db
 
 ## Verification status and remaining constraints
 
-The virtual-environment test suite passed: 13 tests covering telemetry ingestion, limit conversion, device fail-off decisions, energy accounting, and Modbus framing. Physical hardware checks were **not run**. Validate sensor scaling and relay polarity against the actual PZEM modules and SSRs before enabling active control.
+The virtual-environment test suite passed: 15 tests covering telemetry ingestion, local no-SMTP registration and login, dashboard access, limit conversion, device fail-off decisions, energy accounting, and Modbus framing. Physical hardware checks were **not run**. Validate sensor scaling and relay polarity against the actual PZEM modules and SSRs before enabling active control.
 
 The Flask development server is still present for local startup; production hosting requires a WSGI server and HTTPS termination. The Pi's HTTP API requires an environment token but is not encrypted when plain HTTP is used. Email requests have a timeout but no external mail-service retry/rate-limit mechanism. The device loop uses fail-off behavior; the software is not a substitute for independent electrical protection.
